@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.production
+
+# Build output
+dist/
+dist-ssr/
+
+# OS-specific files
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# TLS certs (local dev only, never commit)
+backend/certs/
+frontend/certs/

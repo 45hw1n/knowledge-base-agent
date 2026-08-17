@@ -1,0 +1,15 @@
+{
+  "input": {
+    "listInfo": {
+      "page": 1,
+      "pageSize": 25,
+      "sort": [{ "attribute": "createdAt", "order": "DESC" }],
+      "conditions": {
+        "operator": "AND",
+        "operands": [
+          { "attribute": "status", "operator": "is", "value": "READY_TO_REVIEW" }
+        ]
+      }
+    }
+  }
+}
