@@ -11,6 +11,8 @@ const { updateAppStatus, updateAppStatusInternal } = require('../controllers/upd
 const AppStatus = require('../models/AppStatus');
 const { MAX_SYNC_FAILURES } = require('../utils/Constants');
 const attachmentService = require('../services/attachments/attachmentService');
+const listingService = require('../services/listingService');
+const Entity = require('../models/Entity');
 
 function parseJsonLiteral(ast) {
     switch (ast.kind) {
@@ -204,6 +206,41 @@ const resolvers = {
                     extensions: { code: error.code || 'INTERNAL_ERROR' }
                 });
             }
+        },
+        entities: async (_, { input }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            try {
+                return await listingService.listEntities(input, { userId: user._id });
+            } catch (error) {
+                const mapped = listingService.mapListError(error);
+                throw new GraphQLError(mapped.message, { extensions: { code: mapped.code } });
+            }
+        },
+        entity: async (_, { id }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const entity = await Entity.findOne({ _id: id, userId: user._id }).lean();
+            if (!entity) return null;
+
+            return {
+                id: entity._id.toString(),
+                entityType: entity.entityType,
+                data: entity.data,
+                sourceType: entity.sourceType,
+                sourceEmailId: entity.sourceEmailId ? entity.sourceEmailId.toString() : null,
+                sourceAttachmentId: entity.sourceAttachmentId || null,
+                rawTextSnippet: entity.rawTextSnippet || null,
+                confidence: entity.confidence ?? null,
+                status: entity.status,
+                extractedAt: entity.extractedAt?.toISOString?.() || null,
+                createdAt: entity.createdAt?.toISOString?.() || null,
+                updatedAt: entity.updatedAt?.toISOString?.() || null
+            };
         },
     },
     Mutation: {

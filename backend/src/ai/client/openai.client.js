@@ -4,13 +4,18 @@ const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 5000;
 
-if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is missing from environment variables');
+// Lazily constructed — this file is required unconditionally by ai/client/index.js
+// alongside every other provider, so it must not throw unless it's actually used.
+let openai;
+function getClient() {
+    if (!process.env.OPENAI_API_KEY) {
+        throw new Error('OPENAI_API_KEY is missing from environment variables');
+    }
+    if (!openai) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+    return openai;
 }
-
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 
 function isRetryable(error) {
     return (
@@ -40,7 +45,7 @@ const openaiClient = {
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
-                const completion = await openai.chat.completions.create({
+                const completion = await getClient().chat.completions.create({
                     model,
                     messages: [
                         {

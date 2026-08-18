@@ -2,9 +2,9 @@ const gmailService = require('./gmailService');
 const DebitEmailToProcess = require('../models/DebitEmailToProcess');
 const UserPreferences = require('../models/UserPreferences');
 const AppStatus = require('../models/AppStatus');
-const { decodeBase64, extractEmailSnapshot } = require('../utils/helpers');
+const { extractEmailSnapshot } = require('../utils/helpers');
 const { encryptClearText } = require('../utils/emailEncryption');
-const { TRANSACTION_REGEX, NEGATIVE_REGEX, STORE_TRANSACTION_MAIL_THRESHOLD, MAX_SYNC_FAILURES } = require('../utils/Constants');
+const { MAX_SYNC_FAILURES } = require('../utils/Constants');
 const { updateAppStatus } = require('../controllers/updateAppStatusController');
 const { processDebitEmails } = require('./debitEmailProcessorService');
 
@@ -20,42 +20,34 @@ async function processEmail(userId, messageId) {
         // Fetch the full message
         const emailData = await gmailService.fetchMessage(userId, messageId);
 
-        // Get subject and body
+        // Get subject and sender (used for logging/context only — the persisted body
+        // text comes from extractEmailSnapshot below)
         const headers = emailData.payload.headers;
         const subject = headers.find((h) => h.name === 'Subject')?.value || 'No Subject';
         const from = headers.find((h) => h.name === 'From')?.value || 'Unknown';
         const date = headers.find((h) => h.name === 'Date')?.value || 'Unknown Date';
-        const body = extractEmailBody(emailData.payload);
+        const attachments = extractAttachmentRefs(emailData.payload);
 
         console.log(`Email processed:`, messageId);
 
-        const result = checkDebitTransactionEmail({ messageId, from, subject, body, date });
+        // Every synced email is queued for entity extraction — Cortex has no
+        // finance-specific ingestion filter (the old debit-transaction regex gate
+        // was removed; there's no equivalent concept for a generic knowledge base).
+        const { metadata, encryptedCleanText, bodyHash, snippet, threadId } =
+            await extractEmailSnapshot(emailData);
+        const savedEmail = await saveEmailToProcess(userId, { messageId, from, subject, date, metadata, encryptedCleanText, bodyHash, threadId, snippet, attachments });
 
-        if (result?.confidenceScore > 0 && result.confidenceScore < STORE_TRANSACTION_MAIL_THRESHOLD) {
-            console.log(
-                `[NearMiss] messageId=${messageId} score=${result.confidenceScore} signals=[${result.matchedSignals.join(', ')}] subject="${subject}" from="${from}"`
-            );
-        }
-
-        if (result?.confidenceScore >= STORE_TRANSACTION_MAIL_THRESHOLD) {
-            const { metadata, encryptedCleanText, bodyHash, snippet, threadId } =
-                await extractEmailSnapshot(emailData);
-            const savedEmail = await saveDebitTransactionEmail(userId, { messageId, from, subject, body, date, transactionType: 'DEBIT', metadata, encryptedCleanText, bodyHash, threadId, snippet, _processed_result: result });
-
-            // Auto-process if enabled (fire-and-forget)
-            if (savedEmail?._id) {
-                const prefs = await UserPreferences.findOne({ userId });
-                if (prefs?.autoProcess) {
-                    console.log(`[AutoProcess] Triggering for emailId=${savedEmail._id}`);
-                    processDebitEmails({ ids: [savedEmail._id.toString()], userId })
-                        .catch(err => console.error('[AutoProcess] Failed:', err.message));
-                }
+        // Auto-process if enabled (fire-and-forget)
+        if (savedEmail?._id) {
+            const prefs = await UserPreferences.findOne({ userId });
+            if (prefs?.autoProcess) {
+                console.log(`[AutoProcess] Triggering for emailId=${savedEmail._id}`);
+                processDebitEmails({ ids: [savedEmail._id.toString()], userId })
+                    .catch(err => console.error('[AutoProcess] Failed:', err.message));
             }
-
-            return { status: 'processed', isTransaction: true, messageId };
         }
 
-        return { status: 'processed', isTransaction: false, messageId };
+        return { status: 'processed', messageId };
     } catch (error) {
         console.error(`Error processing email ${messageId}:`, error);
         throw error;
@@ -106,85 +98,52 @@ async function syncRecentEmails(userId) {
     }
 }
 
-function extractEmailBody(payload) {
-    if (payload.body?.data) {
-        return decodeBase64(payload.body.data);
+/**
+ * Walk a Gmail message payload and collect references (not bytes) to every
+ * part that represents an attachment — i.e. it has a filename and its body
+ * is too large to be inlined (body.attachmentId instead of body.data).
+ * Bytes are fetched lazily at extraction time via gmailService.fetchAttachment.
+ */
+function extractAttachmentRefs(payload, refs = []) {
+    if (!payload) return refs;
+
+    if (payload.filename && payload.body?.attachmentId) {
+        refs.push({
+            attachmentId: payload.body.attachmentId,
+            filename: payload.filename,
+            mimeType: payload.mimeType || 'application/octet-stream',
+            size: payload.body.size ?? null
+        });
     }
 
     if (payload.parts?.length) {
-        const textPart = payload.parts.find((part) => part.mimeType === 'text/plain');
-        if (textPart?.body?.data) {
-            return decodeBase64(textPart.body.data);
-        }
-
-        const htmlPart = payload.parts.find((part) => part.mimeType === 'text/html');
-        if (htmlPart?.body?.data) {
-            return decodeBase64(htmlPart.body.data);
+        for (const part of payload.parts) {
+            extractAttachmentRefs(part, refs);
         }
     }
 
-    return '[No readable body found]';
-}
-
-function checkDebitTransactionEmail(email) {
-    const { from = '', subject = '', body = '' } = email;
-    const text = `${subject} ${body}`.toLowerCase();
-
-    if (NEGATIVE_REGEX.test(text)) {
-        return { isTransaction: false, matchedSignals: [], confidenceScore: 0, reason: 'negative_keyword' };
-    }
-
-    const matches = {
-        amount: TRANSACTION_REGEX.amount.test(text),
-        debitVerbs: TRANSACTION_REGEX.debitVerbs.test(text),
-        transactionWords: TRANSACTION_REGEX.transactionWords.test(text),
-        financialSender: TRANSACTION_REGEX.financialSender.test(from.toLowerCase()),
-        cardSuffix: TRANSACTION_REGEX.cardSuffix.test(text)
-    };
-
-    const strongSignals = ['amount', 'debitVerbs'];
-    const weakSignals = ['transactionWords', 'financialSender', 'cardSuffix'];
-
-    const matchedSignals = Object.entries(matches)
-        .filter(([_, value]) => value)
-        .map(([key]) => key);
-
-    const hasStrongSignal = strongSignals.some(s => matches[s]);
-    const weakSignalCount = weakSignals.filter(s => matches[s]).length;
-
-    const isTransaction =
-        hasStrongSignal &&
-        (weakSignalCount >= 1 || (matches.amount && matches.debitVerbs));
-
-    return {
-        isTransaction,
-        matchedSignals,
-        confidenceScore: matchedSignals.length * 20
-    };
+    return refs;
 }
 
 function isEncrypted(value) {
     return value && typeof value === 'object' && value.iv && value.content && value.tag;
 }
 
-async function saveDebitTransactionEmail(userId, data) {
+async function saveEmailToProcess(userId, data) {
     try {
-        const { messageId, from, subject, body, date, transactionType, _processed_result, metadata, encryptedCleanText, threadId, bodyHash, snippet } = data;
+        const { messageId, from, subject, date, encryptedCleanText, threadId, bodyHash, snippet, attachments } = data;
 
-        const debitEmail = new DebitEmailToProcess({
+        const emailToProcess = new DebitEmailToProcess({
             accountUserId: userId,
             messageId,
             from: isEncrypted(from) ? from : (encryptClearText(from) || null),
             subject: isEncrypted(subject) ? subject : (encryptClearText(subject) || null),
-            body,
             date,
-            // metadata,
             encryptedCleanText,
             bodyHash,
             threadId,
             snippet: isEncrypted(snippet) ? snippet : (encryptClearText(snippet) || null),
-            transactionType,
-            _processed_result,
+            attachments: attachments || [],
             source: 'email',
             status: "DETECTED",
             LLMProcessedAt: null,
@@ -192,14 +151,14 @@ async function saveDebitTransactionEmail(userId, data) {
             LLMProcessCount: 0
         });
 
-        await debitEmail.save();
-        console.log('✅ Debit email saved:', messageId);
-        return debitEmail;
+        await emailToProcess.save();
+        console.log('✅ Email queued for processing:', messageId);
+        return emailToProcess;
     } catch (error) {
         if (error.code === 11000) {
-            console.log('ℹ️ Debit email already exists:', data.messageId);
+            console.log('ℹ️ Email already queued:', data.messageId);
         } else {
-            console.error('❌ Error saving debit email:', error);
+            console.error('❌ Error saving email to process:', error);
             throw error;
         }
     }

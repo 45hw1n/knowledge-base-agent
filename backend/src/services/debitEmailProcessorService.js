@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const DebitEmailToProcess = require("../models/DebitEmailToProcess");
-// TODO: orchestrator rewrite pending for Cortex entity extraction (old orchestrator/context deleted with processDebitEmails)
+const { extractEntitiesFromEmail } = require("../ai/features/extractEntities/orchestrator");
 
 const BATCH_SIZE = 5;
 const INTER_BATCH_DELAY_MS = 500;
@@ -98,9 +98,6 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
 
   const allowedStatuses = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"];
 
-  // TODO: orchestrator rewrite pending for Cortex entity extraction
-  const sharedData = null;
-
   let queuedCount = 0;
   const batches = chunkArray(emails, BATCH_SIZE);
 
@@ -128,12 +125,16 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
         const lockedId = locked._id;
 
         try {
+          let extractionResult;
           await aiConcurrencyLimit.acquire();
           try {
-            // TODO: orchestrator rewrite pending for Cortex entity extraction
-            throw new Error("Orchestrator not yet implemented for Cortex entity extraction");
+            extractionResult = await extractEntitiesFromEmail(locked);
           } finally {
             aiConcurrencyLimit.release();
+          }
+
+          if (extractionResult.error) {
+            throw new Error(extractionResult.error);
           }
 
           await DebitEmailToProcess.updateOne(
@@ -149,7 +150,7 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
           );
 
           console.log(
-            `[DebitEmailProcessor] emailId=${lockedId} processed successfully`,
+            `[DebitEmailProcessor] emailId=${lockedId} processed successfully, entitiesCreated=${extractionResult.entitiesCreated}`,
           );
           return 1;
         } catch (error) {

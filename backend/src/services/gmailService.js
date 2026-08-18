@@ -215,6 +215,32 @@ async function fetchMessage(userId, messageId) {
 }
 
 /**
+ * Fetch the raw bytes of a message attachment.
+ * @param {string} userId - MongoDB user ID
+ * @param {string} messageId - Gmail message ID
+ * @param {string} attachmentId - Gmail attachment ID (from a message part's body.attachmentId)
+ * @returns {Buffer} - Decoded attachment bytes
+ */
+async function fetchAttachment(userId, messageId, attachmentId) {
+  try {
+    const { client } = await getAuthenticatedClient(userId);
+
+    const response = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+      auth: client,
+    });
+
+    const data = response.data.data || '';
+    return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  } catch (error) {
+    console.error('Error fetching attachment:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Stop Gmail watch
  * @param {string} userId - MongoDB user ID
  */
@@ -326,6 +352,7 @@ async function hasRequiredScopes(userId, requiredScopeKeys) {
 module.exports = {
   setupWatch,
   fetchMessage,
+  fetchAttachment,
   stopWatch,
   listMessages,
   listHistory,

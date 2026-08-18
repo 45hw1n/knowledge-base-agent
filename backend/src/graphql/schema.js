@@ -190,6 +190,63 @@ const typeDefs = gql`
   }
 
   """
+  An extracted knowledge-base entity. entityType and data are intentionally
+  open-ended — Cortex extracts whatever entity types the AI identifies in a
+  document rather than a fixed set, so data's shape varies by entityType.
+  """
+  type Entity {
+    id: ID!
+    entityType: String!
+    data: JSON!
+    sourceType: String!
+    sourceEmailId: ID
+    sourceAttachmentId: String
+    rawTextSnippet: String
+    confidence: Float
+    status: String!
+    extractedAt: String
+    createdAt: String
+    updatedAt: String
+  }
+
+  enum EntityListField {
+    id
+    entityType
+    status
+    sourceType
+    sourceEmailId
+    confidence
+    extractedAt
+    createdAt
+  }
+
+  input EntityListSortInput {
+    attribute: EntityListField!
+    order: ListSortOrder!
+  }
+
+  input EntityListConditionInput {
+    operator: String!
+    attribute: EntityListField
+    value: JSON
+    operands: [EntityListConditionInput!]
+  }
+
+  input EntityListRequestInput {
+    page: Int
+    pageSize: Int
+    sort: [EntityListSortInput!]
+    conditions: EntityListConditionInput
+  }
+
+  type EntityListResponse {
+    data: [Entity!]!
+    listInfo: ListInfo!
+    pagination: ListPagination!
+    meta: ListMeta!
+  }
+
+  """
   Generic attachment infrastructure — shared across every entity that can
   hold attachments (profiles, workspaces, recurring payments today; new
   Cortex entity types register their own handler as they're added).
@@ -276,6 +333,8 @@ const typeDefs = gql`
     ): GetDebitEmailsToProcessByStatusResponse!
     loginWithGoogle: String!
     getAttachmentDownloadUrl(input: AttachmentDownloadUrlInput!): String!
+    entities(input: EntityListRequestInput): EntityListResponse!
+    entity(id: ID!): Entity
   }
 
   type Mutation {

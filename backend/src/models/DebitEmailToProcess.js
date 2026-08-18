@@ -33,10 +33,17 @@ const DebitEmailToProcessSchema = new mongoose.Schema({
     bodyHash: {
         type: String
     },
-    transactionType: {
-        type: String,
-        enum: ['DEBIT', 'CREDIT', 'UNKNOWN'],
-        default: 'UNKNOWN'
+    attachments: {
+        type: [
+            {
+                attachmentId: { type: String, required: true },
+                filename: { type: String, required: true },
+                mimeType: { type: String, required: true },
+                size: { type: Number, default: null }
+            }
+        ],
+        default: [],
+        _id: false
     },
     source: {
         type: String,
