@@ -436,3 +436,111 @@ either (a) writing throwaway code against typed collections that don't
 exist yet, or (b) prematurely designing the real AI-extraction rewrite —
 both explicitly out of scope ("do not implement AI extraction yet"). This
 is flagged as a known gap, not a silent one.
+
+---
+
+## Event Entity (first typed child entity)
+
+### Decision: `userId` added to the persisted model despite not appearing in the spec's TS interface
+
+**Context:** The given `Event` interface has no `userId` field.
+
+**Reasoning:** Every existing model (`User`, `Entity`, `EmailThread`,
+`AppStatus`, `UserPreferences`) carries `userId` for tenant isolation, and
+the listing engine's `tenantMatchFactory` pattern depends on it being
+present on every queryable collection. Reading the illustrative interface as
+the **public/API-facing shape** (what a client already-authenticated as a
+specific user would receive back — it doesn't need its own userId echoed to
+it) rather than the literal persisted-document shape, `userId` was added as
+a required, indexed field on the Mongoose model. Omitting it would be a
+genuine multi-tenancy bug, not spec compliance — flagging this explicitly as
+a deliberate, necessary deviation rather than a silent one.
+
+### Decision: `_id` (ObjectId), not a prefixed string like `evt_123`
+
+**Context:** The spec's example JSON shows `"id": "evt_123"`.
+
+**Reasoning:** The instruction explicitly prioritizes "follow the existing
+project's ID generation conventions" over the illustrative example — every
+model in this codebase uses Mongoose's default ObjectId `_id`, with zero
+precedent for prefixed string IDs anywhere. Introducing one just for Event
+would be exactly the kind of "new architectural pattern just for Event" the
+instructions warn against. The `_id` → `id` string mapping (if/when Event is
+exposed via GraphQL) follows the same existing convention as the `Entity`
+resolver: manual mapping in the resolver layer (`id: doc._id.toString()`),
+not a schema-level `toJSON` transform — there is exactly one sub-schema in
+this codebase using a transform (`models/schemas/AttachmentSchema.js`, a
+different, unrelated concept: full R2 storage attachment records, not a
+lightweight document reference), and it's not the convention for top-level
+models.
+
+### Decision: No TypeScript types were created
+
+**Context:** The instructions ask to "create/update corresponding
+TypeScript types/interfaces."
+
+**Reasoning:** The backend has no TypeScript anywhere — checked
+exhaustively; the only `.ts` file in the entire backend
+(`listing/core/types.ts`) is dead: never imported by any `.js` file, and
+`typescript` isn't even a dependency, so it isn't type-checked or compiled
+by anything. It appears to be a leftover documentation artifact paired with
+a hand-written `types.js` that's what actually gets used at runtime.
+Creating a new `.ts` file for Event would introduce a build step / tooling
+pattern that doesn't exist anywhere in this project, directly against "do
+not introduce a new architectural pattern just for Event." The Mongoose
+schema plus JSDoc comments in `Event.js` serve the same documentation
+purpose using the project's actual existing convention.
+
+### Decision: Event has no top-level `status`, and no `entityType`/`entityId`
+
+**Reasoning:** Directly per spec — a scheduling event has no comparable
+lifecycle to a Ticket/Invoice's business status, and Event is a first-class
+entity that doesn't need a self-referential pointer back to `Entity`; that
+association (`Entity.type = 'EVENT'`, `Entity.entityId = event._id`) is
+owned entirely by `Entity`, one-directionally. Adding a back-reference on
+Event would duplicate information Entity already holds and create two
+sources of truth for the same relationship.
+
+### Decision: Generic `url` field, not `meetingUrl`
+
+**Reasoning:** Per spec — the event's own URL may be a Google Meet link,
+Zoom link, Teams link, or a registration/details page; naming it
+`meetingUrl` would misdescribe the non-meeting cases. Kept structurally and
+conceptually separate from `sourceUrl` (where the Event was extracted
+*from*, e.g. the Gmail message) — the two can never be confused since they
+serve entirely different purposes (see decisions.md's existing Entity
+section on the same url-vs-sourceUrl distinction, applied consistently here).
+
+### Decision: Attachments are `{documentId, filename}` references only
+
+**Reasoning:** Per spec — Document ownership of storage/processing/metadata
+belongs entirely to the (not yet implemented) `Document` entity. Event's
+`AttachmentRefSchema` deliberately does not reuse the existing
+`models/schemas/AttachmentSchema.js` (a different concept: full storage
+records with `storageKey`/`mimeType`/`size` for the R2-backed attachment
+system) — embedding that shape into Event would duplicate storage metadata
+Document is meant to own exclusively.
+
+### Decision: `validateExtractedEvent()` built standalone, not wired into the live orchestrator
+
+**Reasoning:** Same precedent as `EmailThread`/`threadService` last phase —
+the current orchestrator (`ai/features/extractEntities/`) is generic and
+type-agnostic (freeform `entityType`/`data`), and is itself being
+superseded by the classifier → thread → Entity → typed-child pipeline this
+spec is building phase by phase. Wiring one type-specific validator into
+that generic orchestrator now would leave it in an inconsistent
+half-migrated state. `validateExtractedEvent()` is a standalone, pure,
+tested function mirroring the existing `postProcessor.js` convention (never
+throws; returns `{ event: null, error }` on malformed input), ready to be
+called once the real classifier-driven orchestrator exists. **Flagging
+explicitly, as before**: if live wiring was actually wanted now, say so.
+
+### Decision: No GraphQL exposure added
+
+**Reasoning:** The instruction was conditional — "update API/GraphQL
+definitions if the project exposes Event through them." It doesn't yet
+(the existing `entities`/`entity` GraphQL surface is already broken against
+the current `Entity` model per the prior phase's flagged conflicts), so
+adding Event to a currently-broken surface was skipped rather than compounding
+an already-flagged gap. Will be addressed alongside fixing that surface once
+enough typed entities exist to make the fix meaningful.
