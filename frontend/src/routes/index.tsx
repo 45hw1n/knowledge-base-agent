@@ -5,7 +5,6 @@ import HomePage from "@/pages/HomePage";
 import LoginPage from "@/pages/LoginPage";
 import OnboardPage from "@/pages/OnboardPage";
 import PrivacyPolicyPage from "@/pages/PrivacyPolicyPage";
-import ReviewPage from "@/pages/ReviewPage";
 import SettingsPage from "@/pages/SettingsPage";
 import TermsOfServicePage from "@/pages/TermsOfServicePage";
 import { OnboardedRoute } from "@/router/OnboardedRoute";
@@ -31,7 +30,6 @@ export function AppRoutes() {
           <Route element={<OnboardedRoute />}>
             <Route element={<AppLayout />}>
               <Route path="/home" element={<HomePage />} />
-              <Route path="/review" element={<ReviewPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

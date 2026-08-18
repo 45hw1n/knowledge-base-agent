@@ -1,6 +1,6 @@
 const express = require('express');
 const passport = require('passport');
-const { LOGIN_SCOPES, SHEETS_SCOPES } = require('../utils/Constants');
+const { LOGIN_SCOPES } = require('../utils/Constants');
 const router = express.Router();
 
 // Only allow relative paths — prevents open redirect attacks.
@@ -38,23 +38,7 @@ router.get('/google/gmail', (req, res, next) => {
   })(req, res, next);
 });
 
-// @desc    Incremental auth — request Google Sheets + Drive scopes
-// @route   GET /auth/google/sheets
-router.get('/google/sheets', (req, res, next) => {
-  if (!req.isAuthenticated()) {
-    return res.status(401).json({ error: 'Must be logged in to connect Google Sheets' });
-  }
-
-  passport.authenticate('google', {
-    scope: [...LOGIN_SCOPES, ...SHEETS_SCOPES],
-    state: req.query.state,
-    accessType: 'offline',
-    loginHint: req.user.email,
-    includeGrantedScopes: true,
-  })(req, res, next);
-});
-
-// @desc    Google auth callback (handles login, gmail, and sheets flows)
+// @desc    Google auth callback (handles login and gmail flows)
 // @route   GET /auth/google/callback
 router.get(
   '/google/callback',

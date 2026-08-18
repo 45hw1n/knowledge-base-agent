@@ -1,5 +1,5 @@
 import { useMutation } from "@apollo/client";
-import { Home, LogOut, Settings, ListTodo } from "lucide-react";
+import { Home, LogOut, Settings } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import FynverseLogo from "@/assets/fynverse-logo.svg";
 import { LOGOUT } from "@/graphql/query/auth/authQueries";
@@ -30,7 +30,6 @@ type SidebarNavItem = {
 
 const navItems: SidebarNavItem[] = [
   { label: "Home", href: "/home", icon: Home },
-  { label: "Review Queue", href: "/review", icon: ListTodo },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

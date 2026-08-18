@@ -1,17 +1,8 @@
 const { GraphQLError } = require('graphql');
-const BankAccount = require('../models/BankAccount');
 const UserPreferences = require('../models/UserPreferences');
 const { updateAppStatus } = require('../controllers/updateAppStatusController');
 
 function validateOnboardingInput(input) {
-    const googleSheetId = input?.googleSheetId?.trim();
-
-    if (!googleSheetId) {
-        throw new GraphQLError('Google Sheet ID is required', {
-            extensions: { code: 'BAD_USER_INPUT' }
-        });
-    }
-
     if (typeof input?.isBetaUser !== 'boolean') {
         throw new GraphQLError('isBetaUser must be a boolean value', {
             extensions: { code: 'BAD_USER_INPUT' }
@@ -25,7 +16,6 @@ function validateOnboardingInput(input) {
     }
 
     return {
-        googleSheetId,
         isBetaUser: input.isBetaUser,
         autoProcess: input.autoProcess
     };
@@ -41,25 +31,13 @@ async function onboardUserService(userId, input) {
     const validatedInput = validateOnboardingInput(input);
 
     try {
-        const bankAccounts = await BankAccount.find({ userId, isActive: true }).lean();
-
-        if (!bankAccounts.length) {
-            throw new GraphQLError(
-                'Please add at least one bank account to complete onboarding and start tracking your finances.',
-                {
-                    extensions: { code: 'BAD_USER_INPUT' }
-                }
-            );
-        }
-
         const preferences = await UserPreferences.findOneAndUpdate(
             { userId },
             {
                 $set: {
                     userId,
                     isBetaUser: validatedInput.isBetaUser,
-                    autoProcess: validatedInput.autoProcess,
-                    googleSheetId: validatedInput.googleSheetId
+                    autoProcess: validatedInput.autoProcess
                 }
             },
             {
@@ -78,7 +56,6 @@ async function onboardUserService(userId, input) {
             data: {
                 isBetaUser: preferences.isBetaUser,
                 autoProcess: preferences.autoProcess,
-                googleSheetId: preferences.googleSheetId,
                 onboarded: true
             }
         };

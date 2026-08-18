@@ -8,14 +8,6 @@ const UserPreferencesSchema = new mongoose.Schema({
         unique: true,
         index: true
     },
-    salaryCycleDay: {
-        type: Number,
-        optional: true
-    },
-    monthlyBudget: {
-        type: Number,
-        optional: true
-    },
     emailSyncStartDate: {
         type: Date,
         optional: true
@@ -27,10 +19,6 @@ const UserPreferencesSchema = new mongoose.Schema({
     autoProcess: {
         type: Boolean,
         default: false
-    },
-    googleSheetId: {
-        type: String,
-        default: null
     }
 }, {
     collection: 'userPreferences',

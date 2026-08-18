@@ -5,7 +5,6 @@ const passport = require('passport');
 
 const authRoutes = require('./routes/auth');
 const webhookRoutes = require('./routes/webhook');
-const whatsappRoutes = require('./whatsapp/routes/whatsappRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 
 const app = express();
@@ -46,7 +45,6 @@ app.use(express.json());
 
 // Webhooks first (raw body if needed)
 app.use('/webhook', webhookRoutes);
-app.use('/webhooks', whatsappRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

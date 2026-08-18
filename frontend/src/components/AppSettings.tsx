@@ -1,5 +1,4 @@
 import { Settings2 } from "lucide-react";
-import { PrivacyToggle } from "@/components/PrivacyToggle";
 import { AppSignOut } from "@/components/AppSignOut";
 import { Button } from "@/lib/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/lib/ui/popover";
@@ -14,8 +13,6 @@ export function AppSettings() {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-3">
         <div className="space-y-4">
-          <PrivacyToggle variant="popover" persistOnChange />
-
           <AppSignOut />
         </div>
       </PopoverContent>

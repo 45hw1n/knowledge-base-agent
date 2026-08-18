@@ -12,7 +12,7 @@ async function getUserPreferences(userId) {
  */
 async function updateUserPreferences(userId, input) {
     try {
-        const allowedFields = ["salaryCycleDay", "monthlyBudget", "emailSyncStartDate", "autoProcess"];
+        const allowedFields = ["emailSyncStartDate", "autoProcess"];
 
         const filteredInput = Object.fromEntries(
             Object.entries(input).filter(([key]) => allowedFields.includes(key))

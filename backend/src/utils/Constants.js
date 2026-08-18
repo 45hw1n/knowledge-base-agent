@@ -38,7 +38,6 @@ const GOOGLE_SCOPES = {
     EMAIL:          { value: 'https://www.googleapis.com/auth/userinfo.email' },
     OPENID:         { value: 'openid' },
     GMAIL_READONLY: { value: 'https://www.googleapis.com/auth/gmail.readonly' },
-    SPREADSHEETS:   { value: 'https://www.googleapis.com/auth/spreadsheets' },
 };
 
 // Reverse lookup: URL → key (e.g., 'https://...profile' → 'PROFILE')
@@ -55,15 +54,6 @@ const LOGIN_SCOPES = [
     'profile',
     'email',
     GOOGLE_SCOPES.GMAIL_READONLY.value,
-    GOOGLE_SCOPES.SPREADSHEETS.value,
-];
-
-/**
- * Additional scopes requested for Google Sheets export.
- * Requested incrementally when the user opts in.
- */
-const SHEETS_SCOPES = [
-    GOOGLE_SCOPES.SPREADSHEETS.value,
 ];
 
 module.exports = {
@@ -74,5 +64,4 @@ module.exports = {
     GOOGLE_SCOPES,
     SCOPE_URL_TO_KEY,
     LOGIN_SCOPES,
-    SHEETS_SCOPES,
 };

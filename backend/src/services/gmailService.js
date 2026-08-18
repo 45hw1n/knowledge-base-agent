@@ -323,11 +323,6 @@ async function hasRequiredScopes(userId, requiredScopeKeys) {
   };
 }
 
-/**
- * Required scope keys for Google Sheets integration
- */
-const SHEETS_REQUIRED_SCOPES = ['SPREADSHEETS'];
-
 module.exports = {
   setupWatch,
   fetchMessage,
@@ -336,5 +331,4 @@ module.exports = {
   listHistory,
   getAuthenticatedClient,
   hasRequiredScopes,
-  SHEETS_REQUIRED_SCOPES,
 };

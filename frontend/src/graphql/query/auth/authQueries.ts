@@ -17,7 +17,6 @@ export const GET_CURRENT_USER = gql`
         EMAIL
         OPENID
         GMAIL_READONLY
-        SPREADSHEETS
       }
       gmailAuthRevoked
     }
@@ -31,7 +30,6 @@ export const GET_APP_STATUS = gql`
       onboarded
       emailLastSyncedAt
       emailSyncStatus
-      showPrivateEntity
     }
   }
 `;
@@ -41,10 +39,7 @@ export const GET_USER_PREFERENCES = gql`
     getUserPreferences {
       id
       userId
-      salaryCycleDay
-      monthlyBudget
       emailSyncStartDate
-      googleSheetId
       createdAt
       updatedAt
       autoProcess

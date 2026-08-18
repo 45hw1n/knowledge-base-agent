@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const DebitEmailToProcess = require("../models/DebitEmailToProcess");
-const orchestrator = require("../ai/features/processDebitEmails/orchestrator");
-const contextBuilder = require("../ai/features/processDebitEmails/context");
+// TODO: orchestrator rewrite pending for Cortex entity extraction (old orchestrator/context deleted with processDebitEmails)
 
 const BATCH_SIZE = 5;
 const INTER_BATCH_DELAY_MS = 500;
@@ -99,8 +98,8 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
 
   const allowedStatuses = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"];
 
-  // Fetch shared data once for the entire batch — userId is guaranteed at this point
-  const sharedData = await contextBuilder.fetchSharedData(userId);
+  // TODO: orchestrator rewrite pending for Cortex entity extraction
+  const sharedData = null;
 
   let queuedCount = 0;
   const batches = chunkArray(emails, BATCH_SIZE);
@@ -131,10 +130,8 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
         try {
           await aiConcurrencyLimit.acquire();
           try {
-            await orchestrator.execute({
-              emailId: lockedId,
-              accountUserId: locked.accountUserId,
-            }, sharedData);
+            // TODO: orchestrator rewrite pending for Cortex entity extraction
+            throw new Error("Orchestrator not yet implemented for Cortex entity extraction");
           } finally {
             aiConcurrencyLimit.release();
           }
