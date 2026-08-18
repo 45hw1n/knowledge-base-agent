@@ -7,9 +7,6 @@ const express = require('express');
 const { graphqlUploadExpress } = require('graphql-upload-minimal');
 const { registerGmailWatchRenewalJob } = require('./src/jobs/gmailWatchRenewal');
 
-const https = require('https');
-const fs = require('fs');
-
 function validateEnv() {
   const required = [
     'MONGO_URI',
@@ -78,25 +75,11 @@ const startServer = async () => {
 
     const PORT = config.PORT || 5000;
 
-    if (process.env.NODE_ENV === 'local') {
-      // HTTPS options
-      const httpsOptions = {
-        key: fs.readFileSync('./certs/dev.cortex.app-key.pem'),
-        cert: fs.readFileSync('./certs/dev.cortex.app.pem'),
-      };
-
-      https.createServer(httpsOptions, app).listen(PORT, () => {
-        console.log(`HTTPS Server running on https://localhost:${PORT}`);
-        console.log(`REST API ready at https://localhost:${PORT}`);
-        console.log(`GraphQL endpoint: https://localhost:${PORT}/graphql`);
-      });
-    } else {
-      app.listen(PORT, () => {
-        console.log(`Server running in ${config.NODE_ENV} mode on port ${PORT}`);
-        console.log(`REST API ready at http://localhost:${PORT}`);
-        console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
-      });
-    }
+    app.listen(PORT, () => {
+      console.log(`Server running in ${config.NODE_ENV} mode on port ${PORT}`);
+      console.log(`REST API ready at http://localhost:${PORT}`);
+      console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
+    });
 
 
   } catch (error) {

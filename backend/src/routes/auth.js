@@ -46,7 +46,7 @@ router.get(
     // Handle user cancellation — Google sends error=access_denied
     if (req.query.error) {
       console.log('[CALLBACK] OAuth error/cancellation:', req.query.error);
-      return res.redirect(`${process.env.CLIENT_URL}/login`);
+      return res.redirect(`${process.env.FRONTEND_URL}/login`);
     }
     next();
   },
@@ -60,7 +60,7 @@ router.get(
           delete req.session.oauthConsentRetries;
           delete req.session.oauthLoginHint;
           return req.session.save(() => {
-            res.redirect(`${process.env.CLIENT_URL}/login?error=oauth_refresh_token`);
+            res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_refresh_token`);
           });
         }
 
@@ -80,7 +80,7 @@ router.get(
       }
 
       if (!user) {
-        return res.redirect(`${process.env.CLIENT_URL}/login`);
+        return res.redirect(`${process.env.FRONTEND_URL}/login`);
       }
 
       req.logIn(user, (loginErr) => {
@@ -97,12 +97,12 @@ router.get(
           const redirectPath = isValidRedirectPath(state) ? state : '/dashboard';
 
           req.session.save(() => {
-            return res.redirect(`${process.env.CLIENT_URL}${redirectPath}`);
+            return res.redirect(`${process.env.FRONTEND_URL}${redirectPath}`);
           });
         } catch (error) {
           console.error('[CALLBACK] Redirect error:', error);
           req.session.save(() => {
-            return res.redirect(`${process.env.CLIENT_URL}/login`);
+            return res.redirect(`${process.env.FRONTEND_URL}/login`);
           });
         }
       });

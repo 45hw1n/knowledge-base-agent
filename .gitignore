@@ -21,7 +21,3 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-
-# TLS certs (local dev only, never commit)
-backend/certs/
-frontend/certs/

@@ -9,15 +9,10 @@ const aiRoutes = require('./routes/aiRoutes');
 
 const app = express();
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://dev.cortex.app",
-  "https://dev.cortex.app:5173",
-  "https://cortex.app",
-];
+const allowedOrigins = ["http://localhost:5173"];
 
-if (process.env.CLIENT_URL && !allowedOrigins.includes(process.env.CLIENT_URL)) {
-  allowedOrigins.push(process.env.CLIENT_URL);
+if (process.env.FRONTEND_URL && !allowedOrigins.includes(process.env.FRONTEND_URL)) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
 }
 
 console.log("CORS allowedOrigins:", allowedOrigins);
@@ -66,18 +61,21 @@ app.get('/health', (req, res) => {
 // Trust proxy (for Render / reverse proxy)
 app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
 
-const isProd = process.env.NODE_ENV === 'production';
-
 // Sessions
+// No cookie `domain` is set — frontend and backend live on separate platform
+// domains (e.g. vercel.app / onrender.com), so this is always a host-only
+// cookie. secure/sameSite are env-driven: local dev runs over plain HTTP on
+// localhost (secure=false, sameSite=lax is enough since same-site there),
+// while a deployed frontend/backend pair is cross-site over HTTPS and needs
+// secure=true + sameSite=none for the cookie to be sent at all.
 const sessionConfig = {
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: true,              // always true (all envs are HTTPS now)
-    sameSite: 'none',          // always needed for cross-subdomain
-    domain: '.cortex.app',   // critical for sharing across subdomains
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAMESITE || 'lax',
     maxAge: Number(process.env.SESSION_MAX_AGE) || 604800000
   },
 };

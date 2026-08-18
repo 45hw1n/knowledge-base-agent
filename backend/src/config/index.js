@@ -52,7 +52,7 @@ module.exports = {
   PUBSUB_TOPIC_NAME: process.env.PUBSUB_TOPIC_NAME,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   SESSION_SECRET: process.env.SESSION_SECRET,
-  CLIENT_URL: process.env.CLIENT_URL,
+  FRONTEND_URL: process.env.FRONTEND_URL,
   BACKEND_BASE_URL: process.env.BACKEND_BASE_URL || `http://localhost:${process.env.PORT || 5000}`,
 
   // WhatsApp Cloud API (Milestone 1 webhook + echo reply). Optional at boot —
