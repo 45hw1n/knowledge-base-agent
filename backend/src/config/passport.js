@@ -90,10 +90,6 @@ module.exports = function (passport) {
             });
           }
 
-          // ─── Fetch AppStatus before touching the watch ────────────────────────
-          const AppStatus = require('../models/AppStatus');
-          const appStatus = await AppStatus.findOne({ userId: user._id }).lean();
-
           // ─── Capture historyId BEFORE setupWatch() advances it ────────────────
           // setupWatch() overwrites user.historyId with the current live value.
           // We must save the old value here so we can sync the gap later.
@@ -107,13 +103,9 @@ module.exports = function (passport) {
             console.error('Gmail watch setup failed:', err.message);
           }
 
-          // ─── Fire-and-forget recovery sync (onboarded users only) ────────────
-          if (appStatus?.onboarded === true) {
-            triggerLoginSync(user._id.toString(), preWatchHistoryId)
-              .catch(err => console.error('[LoginSync] Unhandled error:', err.message));
-          } else {
-            console.log(`[LoginSync] Skipping sync — user not onboarded (userId=${user._id})`);
-          }
+          // ─── Fire-and-forget recovery sync ─────────────────────────────────────
+          triggerLoginSync(user._id.toString(), preWatchHistoryId)
+            .catch(err => console.error('[LoginSync] Unhandled error:', err.message));
 
           // ─── Update lastLoggedInAt ───────────────────────────────────────────
           try {

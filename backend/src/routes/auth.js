@@ -94,7 +94,7 @@ router.get(
           delete req.session.oauthLoginHint;
 
           const state = req.query.state;
-          const redirectPath = isValidRedirectPath(state) ? state : '/dashboard';
+          const redirectPath = isValidRedirectPath(state) ? state : '/home';
 
           req.session.save(() => {
             return res.redirect(`${process.env.FRONTEND_URL}${redirectPath}`);
