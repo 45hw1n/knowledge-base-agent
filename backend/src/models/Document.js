@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const PersonSchema = require('./schemas/PersonSchema');
+const AttachmentRefSchema = require('./schemas/AttachmentRefSchema');
 
 /**
  * Document is a first-class typed entity — the structured BUSINESS meaning
@@ -34,14 +36,6 @@ const SOURCE_TYPES = ['EMAIL', 'DOCUMENT'];
 // accurate summary should never be forced to pad itself to hit a word count.
 const SUMMARY_WORD_TARGET = { min: 300, max: 500 };
 
-const IssuerSchema = new mongoose.Schema(
-  {
-    name: { type: String, default: null, trim: true },
-    email: { type: String, default: null, trim: true, lowercase: true },
-  },
-  { _id: false }
-);
-
 // `role` is intentionally a free-form string, not an enum — unlike `type`/
 // `sourceType`. The spec lists a suggested vocabulary (CUSTOMER, VENDOR,
 // PARTNER, ISSUER, RECIPIENT, LICENSOR, LICENSEE, OTHER) but explicitly asks
@@ -51,22 +45,6 @@ const PartySchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     role: { type: String, default: null, trim: true },
-  },
-  { _id: false }
-);
-
-// A reference to a physical attachment — reuses this project's existing
-// "attachmentId"/"fileName" naming convention (see
-// services/attachments/attachmentService.js, models/schemas/AttachmentSchema.js)
-// rather than introducing fileId/filename. Deliberately not a Mongoose
-// `ref`: there is no single working "Attachment" collection today (the
-// entity-handler registry backing it is currently all NOT_IMPLEMENTED
-// stubs) — resolving this reference is an application concern, same
-// pattern as Entity.entityId and Event.attachments[].documentId.
-const AttachmentRefSchema = new mongoose.Schema(
-  {
-    attachmentId: { type: String, required: true },
-    fileName: { type: String, required: true, trim: true },
   },
   { _id: false }
 );
@@ -111,7 +89,7 @@ const DocumentSchema = new mongoose.Schema(
     },
 
     issuer: {
-      type: IssuerSchema,
+      type: PersonSchema,
       default: null,
     },
     parties: {
@@ -147,6 +125,21 @@ const DocumentSchema = new mongoose.Schema(
       type: String,
       enum: SOURCE_TYPES,
       required: true,
+    },
+    // Gmail's raw thread id — see Event.js for the same field and the
+    // rationale (plain string, not an ObjectId ref, for direct equality
+    // matching during reconciliation). Optional.
+    threadId: {
+      type: String,
+      default: null,
+    },
+    // Required whenever sourceType is EMAIL — see Event.js.
+    messageId: {
+      type: String,
+      default: null,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
 
     // Flexible bucket for document-specific extras that don't warrant a
@@ -212,6 +205,10 @@ function validateExtractedDocument(raw) {
     return { document: null, error: `Extracted document has an invalid "sourceType": ${raw.sourceType}` };
   }
 
+  if (raw.sourceType === 'EMAIL' && !raw.messageId) {
+    return { document: null, error: 'Extracted document with sourceType EMAIL is missing a required "messageId"' };
+  }
+
   const wordCount = countWords(summary);
   if (wordCount < SUMMARY_WORD_TARGET.min * 0.3 || wordCount > SUMMARY_WORD_TARGET.max * 2) {
     console.warn(
@@ -262,6 +259,8 @@ function validateExtractedDocument(raw) {
       attachments,
       sourceUrl,
       sourceType: raw.sourceType,
+      threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

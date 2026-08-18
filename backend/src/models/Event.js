@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const PersonSchema = require('./schemas/PersonSchema');
 
 /**
  * Event is a first-class typed entity — a calendar/scheduling event
@@ -13,16 +14,6 @@ const mongoose = require('mongoose');
  */
 
 const SOURCE_TYPES = ['EMAIL', 'DOCUMENT'];
-
-// A participant reference — deliberately permissive: either field alone is
-// enough (e.g. an invite that only lists a name, or only an email address).
-const PersonSchema = new mongoose.Schema(
-  {
-    name: { type: String, default: null, trim: true },
-    email: { type: String, default: null, trim: true, lowercase: true },
-  },
-  { _id: false }
-);
 
 // A reference to a separately-extracted Document entity — NOT the
 // attachment's contents. Document ownership of storage/processing/metadata
@@ -122,6 +113,27 @@ const EventSchema = new mongoose.Schema(
       enum: SOURCE_TYPES,
       required: true,
     },
+    // Gmail's raw thread id (same value as EmailThread.providerThreadId) —
+    // stored directly, NOT as an ObjectId ref, so it can be compared by
+    // simple string equality against an incoming message's threadId during
+    // reconciliation (see decisions.md — a deliberate divergence from
+    // Entity.source's internal-ObjectId-ref design). Optional: not every
+    // source guarantees a thread.
+    threadId: {
+      type: String,
+      default: null,
+    },
+    // Gmail's raw message id — required whenever sourceType is EMAIL (an
+    // email-sourced record always has a concrete message it came from);
+    // optional otherwise. Also the key used for message-level
+    // deduplication provenance.
+    messageId: {
+      type: String,
+      default: null,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
+    },
 
     // Flexible bucket for event-specific extras that don't warrant a core
     // field (e.g. a recurrence rule seen in one unusual email). Deliberately
@@ -173,6 +185,10 @@ function validateExtractedEvent(raw) {
     return { event: null, error: `Extracted event has an invalid "sourceType": ${raw.sourceType}` };
   }
 
+  if (raw.sourceType === 'EMAIL' && !raw.messageId) {
+    return { event: null, error: 'Extracted event with sourceType EMAIL is missing a required "messageId"' };
+  }
+
   let endTime = null;
   if (raw.endTime) {
     const parsed = new Date(raw.endTime);
@@ -213,6 +229,8 @@ function validateExtractedEvent(raw) {
       attachments,
       sourceUrl,
       sourceType: raw.sourceType,
+      threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

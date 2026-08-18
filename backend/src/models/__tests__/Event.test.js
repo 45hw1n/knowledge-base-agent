@@ -24,6 +24,8 @@ function validEvent(overrides = {}) {
     attachments: [{ documentId: 'doc_123', filename: 'meeting-agenda.pdf' }],
     sourceUrl: 'https://mail.google.com/mail/u/0/#all/abc123',
     sourceType: 'EMAIL',
+    threadId: 'thread_100',
+    messageId: 'msg_abc123',
     metadata: {},
     ...overrides,
   });
@@ -57,6 +59,7 @@ describe('Event — without optional fields', () => {
       startTime: new Date('2026-08-20T09:00:00Z'),
       sourceUrl: 'https://mail.google.com/mail/u/0/#all/xyz',
       sourceType: 'EMAIL',
+      messageId: 'msg_xyz',
     });
 
     expect(event.validateSync()).toBeUndefined();
@@ -68,6 +71,7 @@ describe('Event — without optional fields', () => {
     expect(event.attendees).toEqual([]);
     expect(event.organizer).toBeNull();
     expect(event.attachments).toEqual([]);
+    expect(event.threadId).toBeNull();
   });
 
   it('has only a start time and no end time', () => {
@@ -214,6 +218,31 @@ describe('Event — url and sourceUrl remain independent', () => {
   });
 });
 
+describe('Event — threadId/messageId provenance', () => {
+  it('threadId is optional', () => {
+    const event = validEvent({ threadId: undefined });
+    expect(event.validateSync()).toBeUndefined();
+    expect(event.threadId).toBeNull();
+  });
+
+  it('messageId is required when sourceType is EMAIL', () => {
+    const error = validEvent({ messageId: undefined }).validateSync();
+    expect(error?.errors?.messageId).toBeDefined();
+  });
+
+  it('messageId is not required when sourceType is DOCUMENT', () => {
+    const error = validEvent({ sourceType: 'DOCUMENT', messageId: undefined }).validateSync();
+    expect(error).toBeUndefined();
+  });
+
+  it('stores threadId/messageId as plain strings for direct equality matching', () => {
+    const event = validEvent({ threadId: 'thread_100', messageId: 'msg_002' });
+    expect(event.validateSync()).toBeUndefined();
+    expect(event.threadId).toBe('thread_100');
+    expect(event.messageId).toBe('msg_002');
+  });
+});
+
 describe('Event — no source.description equivalent, no top-level status', () => {
   it('does not have a description field duplicated under source-like naming', () => {
     // description is the event's own content, not part of a "source" sub-object —
@@ -235,6 +264,8 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       attachments: [{ documentId: 'doc_123', filename: 'agenda.pdf' }],
       sourceUrl: 'https://mail.google.com/mail/u/0/#all/abc123',
       sourceType: 'EMAIL',
+      threadId: 'thread_100',
+      messageId: 'msg_abc123',
     });
 
     expect(error).toBeNull();
@@ -243,6 +274,8 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
     expect(event.endTime).toBeInstanceOf(Date);
     expect(event.attendees).toHaveLength(1);
     expect(event.organizer.email).toBe('jane@acme.com');
+    expect(event.threadId).toBe('thread_100');
+    expect(event.messageId).toBe('msg_abc123');
   });
 
   it('rejects missing title', () => {
@@ -250,6 +283,7 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       startTime: '2026-08-20T15:00:00Z',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
     expect(event).toBeNull();
     expect(error).toMatch(/title/);
@@ -260,6 +294,7 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       title: 'Standup',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
     expect(event).toBeNull();
     expect(error).toMatch(/startTime/);
@@ -270,9 +305,21 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       title: 'Standup',
       startTime: '2026-08-20T15:00:00Z',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
     expect(event).toBeNull();
     expect(error).toMatch(/sourceUrl/);
+  });
+
+  it('rejects a missing messageId when sourceType is EMAIL', () => {
+    const { event, error } = validateExtractedEvent({
+      title: 'Standup',
+      startTime: '2026-08-20T15:00:00Z',
+      sourceUrl: 'https://mail.google.com/x',
+      sourceType: 'EMAIL',
+    });
+    expect(event).toBeNull();
+    expect(error).toMatch(/messageId/);
   });
 
   it('rejects an invalid sourceType', () => {
@@ -292,6 +339,7 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       startTime: '2026-08-20T15:00:00Z',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
       attendees: [{ name: 'Has Name' }, {}],
       organizer: {},
     });
@@ -306,6 +354,7 @@ describe('validateExtractedEvent — LLM structured-output validation', () => {
       startTime: '2026-08-20T15:00:00Z',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
 
     expect(event.endTime).toBeNull();

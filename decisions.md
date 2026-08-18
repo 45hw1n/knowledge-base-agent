@@ -628,3 +628,420 @@ standalone, tested pieces.
   broken from the `Entity` model replacement two phases ago; adding
   `Document` to it now would compound an already-flagged, unfixed gap
   rather than resolve it.
+
+---
+
+## Invoice, Payment, and Reconciliation
+
+### Decision: `threadId`/`messageId` are raw provider strings, not internal ObjectId refs — a deliberate divergence from `Entity.source`
+
+**Context:** `Entity.source.threadId`/`source.emailId` (built two phases
+ago) are Mongoose `ref`s to internal `EmailThread`/`DebitEmailToProcess`
+documents. This phase's spec instead describes reconciliation as direct
+equality — `Invoice.threadId === newEmail.threadId` — against Gmail's own
+raw thread/message id strings.
+
+**Reasoning:** Reconciliation has to compare an incoming webhook's raw
+Gmail `threadId`/`messageId` against what's stored on existing
+Invoice/Payment/Event/Document records *before* any internal-id lookup
+would even be possible — resolving a raw Gmail id to our internal
+`EmailThread._id` first, just to compare `_id`s, adds a lookup with no
+benefit over comparing the raw strings directly. `threadId`/`messageId` on
+Invoice, Payment, and (retroactively) Event/Document are therefore plain
+strings holding the same raw values as `EmailThread.providerThreadId` and
+`DebitEmailToProcess.messageId` — not `ref`s. **Flagging this explicitly**:
+this is a real inconsistency with `Entity.source`'s design, not an
+oversight — an internal-ref lookup is still one query away whenever
+actually needed (`EmailThread.findOne({ userId, providerThreadId: doc.threadId })`).
+
+### Decision: Retrofitted `threadId`/`messageId` onto the already-built `Event`/`Document` models
+
+**Context:** This message states the four provenance fields "should remain
+consistent across all entities," but `Event`/`Document` (built in prior
+phases) only had `sourceUrl`/`sourceType` — no `threadId`/`messageId`.
+
+**Reasoning:** Rather than leave a known, newly-surfaced inconsistency in
+already-written (but still uncommitted) code, both models were retrofitted:
+`threadId` (optional string) and `messageId` (required only when
+`sourceType === 'EMAIL'`, matching the conditional-required pattern already
+used elsewhere). Both models' test suites and `validateExtracted*`
+functions were updated accordingly — verified via the full test run, not
+just asserted. This was a judgment call made without asking first, since it
+was small, additive, backward-compatible, and directly requested by name
+("these fields should remain consistent across all entities") — flagged
+here in case the intent was actually narrower (Invoice/Payment only).
+
+### Decision: `PersonSchema`/`MoneySchema` extracted into `models/schemas/`
+
+**Reasoning:** `{name?, email?}` was independently duplicated in `Event.js`
+(as an inline `PersonSchema`) and `Document.js` (as an inline
+`IssuerSchema`, identical shape) even before this phase added two more
+duplicates (`Invoice.issuer`, `Payment.payer`/`payee`). This exact pattern
+— a reusable embedded sub-schema shared across models — already has a
+precedent in this codebase (`models/schemas/AttachmentSchema.js`, whose own
+comment says "do NOT create per-entity copies of this schema"). Extracted
+both into `models/schemas/PersonSchema.js` and the new
+`models/schemas/MoneySchema.js` (`{value, currency?}`, needed identically
+by `Invoice.amount` and `Payment.amount`), and updated `Event.js`/
+`Document.js` to import rather than redefine. This is the one place this
+phase touched already-shipped code beyond additive fields — done because
+it's the exact established pattern for this exact situation, not a
+speculative refactor.
+
+### Decision: Invoice carries a business `status`; Payment does not
+
+**Reasoning:** Per spec — Invoice has a genuine financial lifecycle
+(`UNPAID → PAID`/`OVERDUE`) the same way Ticket will, unlike Event/Document
+which have no comparable lifecycle. Payment has no equivalent: a Payment
+either was successfully extracted (it exists) or wasn't; there's no
+"payment status" distinct from "did this settle an invoice," and that
+question is answered by `Invoice.status`, not a field on `Payment` itself.
+Adding one would have been exactly the kind of field not asked for and not
+justified by the given shape.
+
+### Decision: `Invoice.status` defaults to `UNPAID`, and nothing in this phase sets it to `PAID` automatically
+
+**Reasoning:** Per spec — "do not mark an Invoice as PAID solely because an
+email contains vague language." `validateExtractedInvoice()` accepts a
+status value if the extraction already supplies a valid one, but defaults
+to `UNPAID`, and nothing built in this phase transitions an existing
+Invoice to `PAID` — that transition is explicitly a reconciliation-pipeline
+responsibility (find matching invoice → link Payment → **then** update
+status), and the pipeline itself isn't wired yet (see below). There's
+intentionally no code path anywhere in this phase that can produce a false
+`PAID`.
+
+### Decision: `conversation` uses `direction: "SENT"|"RECEIVED"`, not `fromUser: boolean`
+
+**Reasoning:** Directly per spec's explicit instruction. A boolean loses
+information a future third scenario (e.g. a third-party CC, or a
+system-generated notification) might need to express; an enum extends
+without a breaking change. Verified via a schema-inspection test that no
+`fromUser` field exists.
+
+### Decision: `conversation` lives only on Invoice, not Payment
+
+**Reasoning:** The spec scopes conversation preservation to Invoice
+specifically ("For Invoice, we may want to preserve relevant messages...").
+Payment has no equivalent described need — a Payment already carries its
+own `sourceUrl`/`threadId`/`messageId` provenance; there's no described use
+case for it to separately accumulate a conversation log.
+
+### Decision: The message-tracking/idempotency requirement is already fully satisfied by the existing `DebitEmailToProcess` design — no new tracking collection was built
+
+**Investigation, not assumption:** Traced `syncEmailsService.js` end to
+end. `DebitEmailToProcess` is created for **every** synced Gmail message
+before classification/extraction happens — including messages that produce
+no entity at all ("I'll get back to you tomorrow") — via a unique index on
+`messageId`. `saveEmailToProcess()` already catches MongoDB's `E11000`
+duplicate-key error and logs "already queued" without throwing or creating
+a duplicate; `syncHistorySince()` additionally pre-checks
+`DebitEmailToProcess.exists({ messageId })` before even fetching the
+message from Gmail, purely as a fetch-avoidance optimization — the actual
+correctness guarantee is the unique index, not this pre-check (a race
+between two concurrent calls is resolved by the database, not the
+application). This is exactly the "atomic database operation / unique
+constraint" the spec asks for, and exactly the "global message tracking
+mechanism, even for emails that produce no entity" it asks for — both
+already exist. Per the explicit instruction not to duplicate a suitable
+existing system, nothing new was built for this requirement; this was
+verified by reading the actual code path, not assumed from the model name.
+
+### Decision: Reconciliation is a standalone, deterministic scoring module — the LLM's relevance/confirmation judgment is explicitly NOT implemented
+
+**Reasoning:** The spec is explicit that two different judgments are
+involved: (1) *is this new email meaningfully relevant to an existing
+Invoice/does it describe a payment confirmation* — an inherently semantic
+judgment the spec assigns to the LLM — and (2) *given a payment has been
+identified, which invoice (if any) does it settle* — a matching problem
+against structured evidence (invoice number, transaction reference, amount,
+payer/payee, thread). Only (2) is implemented, as
+`paymentReconciliationService.findMatchingInvoice()` — a pure, deterministic
+function reusing the same weighted-signal-scoring pattern as the email
+classifier (`classifier/classifier.js`): each piece of evidence contributes
+a weight, and a match is only accepted at or above `MATCH_THRESHOLD` (0.6).
+This directly encodes "do not blindly link on amount alone" — `exact_amount`
+alone (0.35) never clears the threshold by itself; either one very strong
+signal (exact invoice number or transaction reference match, weight 1.0) or
+two corroborating weaker signals (e.g. same-thread + exact-amount = 0.65, or
+exact-amount + payee-matches-issuer = 0.60) are required. Verified against
+both of the spec's own worked examples (the same-thread payment-confirmation
+reply, and the different-thread bank-confirmation email) plus a
+multiple-candidates and a currency-mismatch case.
+
+**Deliberately not built, consistent with every prior phase's precedent:**
+the actual LLM call that judges "is this new thread message relevant" or
+"does this email describe a payment confirmation," and wiring any of
+Invoice/Payment/reconciliation into the live `syncEmailsService.js` /
+orchestrator pipeline. Both remain squarely "AI extraction," out of scope
+for a schema/design phase. **Flagging again, as in every prior phase**:
+say so if live wiring is actually wanted now.
+
+### Decision: `invoiceId`/party-matching evidence (e.g. a stated transaction reference) is never persisted as a guessed field on Payment
+
+**Reasoning:** `validateExtractedPayment()` deliberately ignores/discards
+any `invoiceId` present in raw LLM output (even logging it as ignored in
+tests) — linking is exclusively `paymentReconciliationService`'s job, gated
+on evidence, never a pass-through of whatever the extraction layer guessed.
+This closes off an obvious foot-gun: an LLM could otherwise "helpfully"
+guess an invoice number that turns out wrong, and that association would
+persist as ground truth with no scoring/threshold check at all.
+
+---
+
+## Invoice Attachments and the Reply-to-Payment Relationship
+
+### Decision: Attachments live per-message inside `conversation`, not as a separate top-level `Invoice.attachments` field
+
+**Reasoning:** An attachment is a fact about one specific email (the
+original message's invoice PDF, a later reply's payment receipt) — not
+about the Invoice as an abstract whole. Attaching it to the conversation
+entry that actually carried it preserves that connection; a flat top-level
+list would lose which message each file came from. If a flattened "all
+files across this Invoice" view is ever needed, it's a trivial derived
+read (`invoice.conversation.flatMap(m => m.attachments)`), not something
+worth storing twice.
+
+### Decision: Extracted a shared `AttachmentRefSchema` — but kept it distinct from `Event.attachments[].documentId`
+
+**Context:** `Document.js` already had this exact `{attachmentId, fileName}`
+shape inline; `Invoice.conversation[].attachments` needed the identical
+shape a third time.
+
+**Reasoning:** Same pattern as `PersonSchema`/`MoneySchema` — extracted into
+`models/schemas/AttachmentRefSchema.js`, imported by both `Document.js` and
+`Invoice.js`. Deliberately did **not** merge this with `Event.js`'s own
+`AttachmentRefSchema` (`{documentId, filename}`), even though the names
+look similar — they reference two different kinds of things: a Document
+*entity* (a business object) vs. a physical *file* (raw attachment bytes).
+Merging them would blur that distinction the first time someone tried to
+reuse one where the other was meant.
+
+### Decision: A reply-turned-Payment does not duplicate itself onto `Payment` — the same message plays two independent, non-duplicating roles
+
+**The question this answers:** when a reply to an Invoice thread turns out
+to be a payment confirmation, does `Payment` need its own conversation log
+too?
+
+**Answer: no.** The single Gmail message plays two roles once
+reconciliation runs:
+1. It gets appended to `Invoice.conversation[]` (via
+   `validateConversationMessage()`, new this phase) — preserving it as
+   context on the Invoice, exactly as before.
+2. It independently becomes the *source* of a new `Payment` document —
+   `Payment.messageId`/`threadId`/`sourceUrl` already identify precisely
+   which message produced it.
+
+These two facts are linked implicitly: `Payment.messageId` will equal one
+of the entries in `Invoice.conversation[].messageId`. No new field was
+added to `Payment` to make this explicit, because doing so would duplicate
+data `Invoice.conversation` already holds — the same reasoning already
+applied to why `conversation` lives only on Invoice, not Payment, extended
+one step further. Added a test (`Invoice.test.js` — "Reply-turned-payment")
+that documents this relationship directly, since it's easy to assume
+"conversation" needs to exist on both sides when it doesn't.
+
+**Still not wired (unchanged from prior phases):** the actual
+reconciliation trigger — noticing a reply arrived, deciding it's relevant,
+appending it via `validateConversationMessage()`, and separately running
+`paymentReconciliationService` against it — remains AI-extraction/
+orchestrator work, not built yet.
+
+---
+
+## Multiple Payments per Invoice, PARTIALLY_PAID, and linkMethod
+
+### Decision: `Invoice.status` gains `PARTIALLY_PAID`; no `amountPaid` field was added
+
+**Reasoning:** Once multiple Payments can link to one Invoice, partial
+payment is a real case the two-state UNPAID/PAID split couldn't represent.
+Rather than store a running `amountPaid` total on Invoice (which would need
+to be kept in sync every time a payment links or unlinks — the same
+dual-source-of-truth risk already avoided by not storing a `payments[]`
+array on Invoice), added `determineInvoiceStatus()` — a pure function that
+derives status on demand from the Invoice's amount/due date and its
+currently-linked Payments. `Invoice.status` itself is still a stored field
+(set by whatever code links/unlinks a payment, calling this function), but
+nothing about *how much has been paid* is duplicated anywhere.
+
+**Status precedence, a judgment call, not a spec requirement:** when a
+partial payment exists AND the due date has passed, `PARTIALLY_PAID` wins
+over `OVERDUE` — once any money has moved, that's treated as more useful
+information than a static "overdue" flag. Flagging this specifically since
+reasonable people could want it the other way (surface OVERDUE as an
+urgency signal regardless of partial payment) — easy to flip if so.
+
+**Currency safety:** payments in a different currency than the invoice are
+excluded from the paid-total calculation (and logged, not silently summed)
+— the same principle already applied everywhere else money gets compared
+in this codebase (`amountsMatch()` in the reconciliation service).
+
+### Decision: No `payments[]` array on Invoice — the payments tab queries `Payment.find({ invoiceId })` directly
+
+**Reasoning:** This was your own call, and it's the right one for the same
+reason `amountPaid` wasn't stored: `Payment.invoiceId` is already the
+single source of truth for "which payments belong to this invoice";
+duplicating that as a denormalized list on Invoice would mean keeping two
+places in sync on every link/unlink, for a query MongoDB already answers
+efficiently via the existing `{userId, invoiceId}` index on Payment.
+
+### Decision: `Payment.linkMethod` (`THREAD_CONTEXT` | `RECONCILED` | `MANUAL`) records HOW a link was established — but never makes it permanent
+
+**Context:** The original proposal was "if the payment came from the same
+message/thread as the invoice, it cannot be unlinked." Agreed with the
+underlying instinct (a same-thread reply is materially more trustworthy
+than a cross-thread reconciliation match) but pushed back on making it
+irreversible.
+
+**Reasoning for rejecting a hard block:** this system's entire design so
+far has been built around the idea that even strong-looking evidence can
+be wrong — "do not assume every thread message is relevant," "do not
+blindly link on amount alone," the existence of a manual-override path at
+all (scenario 3). A same-thread reply *can* still be a misread by the AI
+extraction layer. Removing the ability to correct that mistake is worse
+than the small risk of an accidental unlink. Instead: `linkMethod` is
+recorded, and `requiresUnlinkConfirmation(payment)` returns true only for
+`THREAD_CONTEXT`, meant to gate a confirm-twice UI step, not a rejection.
+
+**How `linkMethod` gets its value — same scoring function, one derived bit:**
+scenario 2 (bank email, different thread) and scenario 4 (same-thread
+reply) both go through the identical `findMatchingInvoice()` scoring
+function — the only difference is whether the `same_thread` signal
+contributed to the match. `determineLinkMethod(matchResult)` (added to
+`paymentReconciliationService.js`) reads exactly that:
+`matchedSignals.includes('same_thread')` → `THREAD_CONTEXT`, otherwise
+`RECONCILED`. `MANUAL` is never derived here — it's set directly whenever
+scenario 3's (not yet built) manual-link action runs, since that path
+never calls the scoring function at all.
+
+**Schema-level consistency, both directions:** `linkMethod` is required
+exactly when `invoiceId` is set, and rejected if set while `invoiceId` is
+null — an unlinked payment with a recorded "how it was linked" is just as
+inconsistent a state as a linked payment with no recorded method.
+
+**Still not built:** the actual "unlink" mutation/API that would call
+`requiresUnlinkConfirmation()` and the manual-link action that would set
+`linkMethod: 'MANUAL'` — both are the same kind of live-wiring work
+deferred throughout every phase so far.
+
+---
+
+## Reconciliation Flow — Reference Scenarios
+
+The individual decisions above were made piece by piece; this section
+walks through the four scenarios that motivated them end to end, so the
+overall flow is readable in one place instead of scattered across entries.
+Each scenario names exactly which built pieces are involved and which part
+is still missing (the AI/orchestrator glue — consistent gap across all
+four, not repeated per scenario below except where it matters).
+
+### Scenario 1 — A message is identified as an Invoice
+
+```
+Email arrives → classifier (classifier/classifier.js) scores candidates,
+INVOICE wins
+  → [MISSING: AI extraction reads the email, produces raw invoice fields]
+  → validateExtractedInvoice() (Invoice.js) validates/normalizes the AI's
+    output — malformed output never reaches the database
+  → Invoice created — status defaults to UNPAID (never PAID from
+    extraction alone, regardless of vague language in the source)
+  → an Entity record is created pointing at it (entityId = invoice._id)
+```
+
+### Scenario 2 — A message is identified as a Payment (e.g. a bank debit alert)
+
+```
+Email arrives → classifier scores candidates, PAYMENT wins
+  → [MISSING: AI extraction produces raw payment fields]
+  → validateExtractedPayment() (Payment.js) validates/normalizes —
+    invoiceId is always forced to null here regardless of what the AI
+    guessed; linking is never a byproduct of extraction
+  → Payment created
+  → [MISSING: the code that fetches this user's candidate invoices and
+    calls the function below — findMatchingInvoice() itself is built,
+    the caller that gathers candidates and persists the result is not]
+  → paymentReconciliationService.findMatchingInvoice(evidence, candidates)
+    scores each candidate; below MATCH_THRESHOLD (0.6) → no link, Payment
+    persists with invoiceId: null (this is the "bank alert with only a
+    matching amount, nothing else" case — deliberately unlinked)
+  → if a match clears the threshold: determineLinkMethod(matchResult) →
+    'RECONCILED' (same_thread did NOT contribute) → payment.invoiceId set,
+    payment.linkMethod = 'RECONCILED' → Invoice status re-derived via
+    determineInvoiceStatus() using all of that invoice's linked Payments
+```
+
+Known current limitation, surfaced while discussing this scenario:
+`personMatches()` (used for the payee-matches-issuer signal) does exact,
+case-insensitive string comparison — "Acme Corporation" will NOT match
+"Acme Corp" today. A bank email naming the vendor slightly differently
+than the original invoice's issuer name will fail to link on that signal
+alone. Not fixed yet — flagged as a real gap, not a hidden one; the fix
+would be name-normalization (stripping Corp/Corporation/Inc/Ltd suffixes)
+or fuzzy matching in `personMatches()`, with its own test coverage for the
+Acme Corp / Acme Corporation case specifically.
+
+### Scenario 3 — The user manually links a Payment to an Invoice
+
+```
+User selects Payment X and Invoice Y in the UI
+  → [MISSING: the mutation itself does not exist yet]
+  → intended behavior: payment.invoiceId = Y directly, NO scoring/threshold
+    check (a human assertion is treated as higher-confidence than any
+    automated match by construction) — payment.linkMethod = 'MANUAL'
+  → Invoice status re-derived via determineInvoiceStatus(), same as any
+    other link
+```
+
+This is the one scenario with essentially nothing built yet beyond the
+schema support (`linkMethod: 'MANUAL'` already exists as a valid enum
+value) — no UI, no mutation, no resolver. Called out specifically because
+it would be easy to assume it's covered by the reconciliation service,
+which it deliberately is not and should not be — see the `linkMethod`
+decision above for why manual links skip scoring entirely.
+
+### Scenario 4 — A reply arrives in the invoice's own thread ("Received 5000 thanks")
+
+```
+Reply arrives, same Gmail threadId as an existing Invoice
+  → [MISSING: noticing this thread already has an Invoice, and the AI
+    judgment call on whether this specific reply is meaningful at all —
+    "have a great day" must be ignored, "received 5000" must not]
+  → validateConversationMessage() (Invoice.js) normalizes the reply —
+    appended to Invoice.conversation[] regardless of whether it turns out
+    to be a payment confirmation, as long as it's judged relevant
+  → if judged to be a payment confirmation: a NEW Payment is created
+    (same path as scenario 2) — the reply is a source of a new fact, not
+    just a status flip on the Invoice
+  → findMatchingInvoice() scores this payment against the same-thread
+    Invoice: same_thread (0.3) + exact_amount (0.35) = 0.65, clears
+    MATCH_THRESHOLD
+  → determineLinkMethod(matchResult) → 'THREAD_CONTEXT' (same_thread WAS
+    part of the match) → payment.invoiceId set, payment.linkMethod =
+    'THREAD_CONTEXT' → this link requires confirmation to undo
+    (requiresUnlinkConfirmation() returns true), unlike scenario 2's
+    'RECONCILED' link
+  → Invoice status re-derived — PAID if this fully covers the amount,
+    PARTIALLY_PAID if it only covers part of it
+```
+
+This is the scenario that ties every piece from this whole Invoice/Payment
+phase together in one place: classification, conversation storage,
+reconciliation scoring, `linkMethod` derivation, and status re-derivation
+all participate in a single incoming reply. It's also the scenario with
+the most direct test coverage already in place — `findMatchingInvoice()`'s
+same-thread test and `determineLinkMethod()`'s `THREAD_CONTEXT` test
+together cover exactly this path's matching/labeling logic, even though
+the AI judgment call and the orchestration code that strings these pieces
+together in sequence are still missing.
+
+### What's common to all four, worth saying once instead of four times
+
+Every scenario's "back half" — schema validation, matching, status
+derivation, link-method labeling — is built and tested. Every scenario's
+"front half" — the AI call that turns raw email content into structured
+candidate data, and the orchestration code that decides which function
+runs in which order — is not. This has been true and explicitly flagged
+since the very first Entity/Event/Document phases; nothing about the
+Invoice/Payment work changes that boundary, it just makes the shape of the
+missing piece more concrete now that there's a full scenario set to point
+at.

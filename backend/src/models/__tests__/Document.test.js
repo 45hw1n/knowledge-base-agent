@@ -26,6 +26,8 @@ function validDocument(overrides = {}) {
     attachments: [{ attachmentId: 'att_123', fileName: 'acme-nda-2026.pdf' }],
     sourceUrl: 'https://mail.google.com/mail/u/0/#all/abc123',
     sourceType: 'EMAIL',
+    threadId: 'thread_100',
+    messageId: 'msg_abc123',
     metadata: {},
     ...overrides,
   });
@@ -83,6 +85,7 @@ describe('Document — only required fields', () => {
       summary: 'A short summary of the document content.',
       sourceUrl: 'https://mail.google.com/mail/u/0/#all/xyz',
       sourceType: 'EMAIL',
+      messageId: 'msg_xyz',
     });
 
     expect(doc.validateSync()).toBeUndefined();
@@ -237,6 +240,24 @@ describe('Document — sourceUrl preservation', () => {
   });
 });
 
+describe('Document — threadId/messageId provenance', () => {
+  it('threadId is optional', () => {
+    const doc = validDocument({ threadId: undefined });
+    expect(doc.validateSync()).toBeUndefined();
+    expect(doc.threadId).toBeNull();
+  });
+
+  it('messageId is required when sourceType is EMAIL', () => {
+    const error = validDocument({ messageId: undefined }).validateSync();
+    expect(error?.errors?.messageId).toBeDefined();
+  });
+
+  it('messageId is not required when sourceType is DOCUMENT', () => {
+    const error = validDocument({ sourceType: 'DOCUMENT', messageId: undefined }).validateSync();
+    expect(error).toBeUndefined();
+  });
+});
+
 describe('Document — metadata', () => {
   it('defaults to an empty object', () => {
     const doc = validDocument({ metadata: undefined });
@@ -266,6 +287,8 @@ describe('validateExtractedDocument — LLM structured-output validation', () =>
       attachments: [{ attachmentId: 'att_123', fileName: 'acme-nda-2026.pdf' }],
       sourceUrl: 'https://mail.google.com/mail/u/0/#all/abc123',
       sourceType: 'EMAIL',
+      threadId: 'thread_100',
+      messageId: 'msg_abc123',
     });
 
     expect(error).toBeNull();
@@ -274,6 +297,20 @@ describe('validateExtractedDocument — LLM structured-output validation', () =>
     expect(document.expiryDate).toBeInstanceOf(Date);
     expect(document.parties).toHaveLength(2);
     expect(document.issuer.email).toBe('legal@acme.com');
+    expect(document.threadId).toBe('thread_100');
+    expect(document.messageId).toBe('msg_abc123');
+  });
+
+  it('rejects a missing messageId when sourceType is EMAIL', () => {
+    const { document, error } = validateExtractedDocument({
+      type: 'NDA',
+      title: 'Some Doc',
+      summary: 'summary text',
+      sourceUrl: 'https://mail.google.com/x',
+      sourceType: 'EMAIL',
+    });
+    expect(document).toBeNull();
+    expect(error).toMatch(/messageId/);
   });
 
   it('rejects missing title', () => {
@@ -340,6 +377,7 @@ describe('validateExtractedDocument — LLM structured-output validation', () =>
       summary: 'These terms govern use of the service.',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
 
     expect(document.documentNumber).toBeNull();
@@ -354,6 +392,7 @@ describe('validateExtractedDocument — LLM structured-output validation', () =>
       summary: 'Summary text.',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
       parties: [{ name: 'Some Org' }],
     });
 
@@ -369,6 +408,7 @@ describe('validateExtractedDocument — LLM structured-output validation', () =>
       summary: 'Valid for one year.',
       sourceUrl: 'https://mail.google.com/x',
       sourceType: 'EMAIL',
+      messageId: 'msg_1',
     });
 
     expect(error).toBeNull();
