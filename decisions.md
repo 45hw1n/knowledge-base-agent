@@ -1045,3 +1045,86 @@ since the very first Entity/Event/Document phases; nothing about the
 Invoice/Payment work changes that boundary, it just makes the shape of the
 missing piece more concrete now that there's a full scenario set to point
 at.
+
+---
+
+## Ticket Entity
+
+### Decision: `conversation` (schema + `validateConversationMessage`) extracted into a shared file
+
+**Reasoning:** Ticket needs the exact same `{messageId, direction, content,
+timestamp, attachments}` shape and validator Invoice already had. Moved
+both into `models/schemas/ConversationMessageSchema.js` and retrofitted
+`Invoice.js` to import rather than define its own copy — same extraction
+pattern as `PersonSchema`/`MoneySchema`/`AttachmentRefSchema`. Verified the
+two models now literally share the same Mongoose sub-schema instance
+(tested directly: `Ticket.schema.path('conversation').schema === Invoice.schema.path('conversation').schema`).
+
+### Decision: `createdOn` is just `createdAt` — no separate field was added
+
+**Reasoning:** Every model already gets `createdAt`/`updatedAt`
+automatically via `timestamps: true`. Adding a second, differently-named
+field for the identical concept would create a "which one is authoritative"
+ambiguity for no benefit. `Ticket.createdAt` is what `createdOn` meant.
+
+### Decision: `RESOLVED` added to the status enum (confirmed, not assumed)
+
+Final: `OPEN`, `IN_PROGRESS`, `ON_HOLD`, `RESOLVED`, `CLOSED`. The original
+field list given didn't include it; flagged the discrepancy against the
+very first architecture sketch (which did have it) and got explicit
+confirmation before adding it, rather than silently picking one version.
+
+### Decision: `urgency` and `priority` are two separate fields, both optional, never guessed
+
+**Reasoning:** They answer different questions — urgency is how
+time-sensitive the issue is from the reporter's side; priority is the
+business's assigned importance, which can diverge (a VIP customer's minor
+issue can be high-priority despite low inherent urgency). Both use the
+same `LOW/MEDIUM/HIGH/CRITICAL` value set but are independent fields, not
+one derived from the other. Neither is defaulted to a guessed value when
+the source gives no signal — same "do not invent" principle as everywhere
+else (Invoice.dueDate, Document.effectiveDate, etc.).
+
+### Decision: `ticketNumber` added — not originally in the given field list, my own suggestion
+
+**Reasoning:** The classifier already has a `ticket_number_pattern` rule
+(`classifier/rules/ticket.rules.js`) specifically detecting things like
+"Ticket #12345"/"Case #123" — it would have been a real gap to detect that
+signal and have nowhere in the schema to persist it. Same pattern as
+`Invoice.invoiceNumber`/`Document.documentNumber`: only populated when an
+actual number is present in the source, never generated.
+
+### Decision: `assignee` is manual/mock-only — the schema allows it, extraction never sets it
+
+**Confirmed directly**: this is a mock system with no real staff/user
+directory, and assignment is a human selection, not something an email
+could ever state. `validateExtractedTicket()` forces `assignee: null`
+unconditionally, discarding whatever the AI output might contain for it —
+same principle as `Payment.invoiceId` never being a pass-through of the
+AI's guess. `requester`, in contrast, CAN be populated from extraction
+(usually inferable from the sender), with the same caution already applied
+to `Event.organizer`/`Document.issuer`: not assumed automatically, only set
+when the source gives actual evidence.
+
+### Decision: `parentTicketId`/`duplicateOfTicketId` — stored on the child/duplicate side, never set by extraction
+
+**Reasoning, relationship modeling:** Same "store the FK on the many/
+pointing side, don't duplicate as an array" principle already applied to
+`Payment.invoiceId` (not `Invoice.payments[]`). A ticket's children:
+`Ticket.find({ parentTicketId: ticket._id })`; its duplicates:
+`Ticket.find({ duplicateOfTicketId: ticket._id })`. No `childTicketIds[]`/
+`duplicateTicketIds[]` array exists on the parent/canonical ticket.
+
+**Reasoning, never AI-set:** Detecting "is this a duplicate of an existing
+open ticket" or "is this a sub-task of that other ticket" is an
+evidence-based matching problem — structurally the same kind of decision
+`paymentReconciliationService.findMatchingInvoice()` makes for
+Payment↔Invoice, not something to let a single extraction pass guess at
+directly. `validateExtractedTicket()` forces both fields to null
+unconditionally. **Deliberately not built yet**: the equivalent
+`ticketReconciliationService`-style matching logic (e.g. same thread + same
+requester + similar title → likely a duplicate) — this is squarely the
+next kind of "AI-extraction-adjacent but still deterministic" work in the
+same shape as the payment reconciliation service, flagged the same way
+every prior phase's missing piece has been.
+

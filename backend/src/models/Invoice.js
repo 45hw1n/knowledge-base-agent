@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
 const PersonSchema = require('./schemas/PersonSchema');
 const MoneySchema = require('./schemas/MoneySchema');
-const AttachmentRefSchema = require('./schemas/AttachmentRefSchema');
+const ConversationMessageSchema = require('./schemas/ConversationMessageSchema');
+const { CONVERSATION_DIRECTIONS, validateConversationMessage } = ConversationMessageSchema;
 
 /**
  * Invoice represents a financial OBLIGATION/request for payment — distinct
@@ -18,30 +19,6 @@ const SOURCE_TYPES = ['EMAIL', 'DOCUMENT'];
 // (see decisions.md) — an invoice with SOME but not all of its amount
 // covered needs a status distinct from both UNPAID and PAID.
 const INVOICE_STATUSES = ['UNPAID', 'PARTIALLY_PAID', 'PAID', 'OVERDUE'];
-// direction is intentionally SENT/RECEIVED, not a `fromUser: boolean` — see
-// decisions.md.
-const CONVERSATION_DIRECTIONS = ['SENT', 'RECEIVED'];
-
-// A single preserved message relevant to this Invoice's conversation
-// (see "Conversation Storage" in decisions.md) — NOT a full email-thread
-// sync, just enough context to explain a status change (e.g. the message
-// that triggered PAID). `attachments` belongs HERE, per message — not as a
-// separate top-level Invoice.attachments field — because an attachment is
-// a fact about one specific email in the conversation (e.g. the original
-// message's invoice PDF, or a later reply's payment receipt), not about
-// the Invoice as a whole. Reuses the same physical-attachment-reference
-// shape as Document.attachments (a raw file reference, not a business
-// entity reference — see schemas/AttachmentRefSchema.js).
-const ConversationMessageSchema = new mongoose.Schema(
-  {
-    messageId: { type: String, required: true },
-    direction: { type: String, enum: CONVERSATION_DIRECTIONS, required: true },
-    content: { type: String, required: true },
-    timestamp: { type: Date, required: true },
-    attachments: { type: [AttachmentRefSchema], default: [] },
-  },
-  { _id: false }
-);
 
 const InvoiceSchema = new mongoose.Schema(
   {
@@ -199,55 +176,6 @@ function validateExtractedInvoice(raw) {
       messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
-    error: null,
-  };
-}
-
-/**
- * Validates and normalizes a single reply message before it's appended to
- * Invoice.conversation. Same never-throws convention as validateExtracted*.
- * Standalone — NOT wired into the (not-yet-built) reply-handling pipeline
- * yet. See decisions.md for how a reply is intended to flow: it gets
- * appended to Invoice.conversation via this validator, and — independently
- * — may ALSO become the source of a new Payment (Payment does not get its
- * own copy of the conversation; its own messageId/threadId/sourceUrl
- * already trace it back to the exact message that produced it).
- *
- * @param {object} raw
- * @returns {{ message: object|null, error: string|null }}
- */
-function validateConversationMessage(raw) {
-  if (!raw || typeof raw !== 'object') {
-    return { message: null, error: 'Conversation message must be an object' };
-  }
-
-  const messageId = typeof raw.messageId === 'string' ? raw.messageId.trim() : '';
-  if (!messageId) {
-    return { message: null, error: 'Conversation message is missing a required "messageId"' };
-  }
-
-  if (!CONVERSATION_DIRECTIONS.includes(raw.direction)) {
-    return { message: null, error: `Conversation message has an invalid "direction": ${raw.direction}` };
-  }
-
-  const content = typeof raw.content === 'string' ? raw.content : '';
-  if (!content) {
-    return { message: null, error: 'Conversation message is missing required "content"' };
-  }
-
-  const timestamp = raw.timestamp ? new Date(raw.timestamp) : null;
-  if (!timestamp || Number.isNaN(timestamp.getTime())) {
-    return { message: null, error: 'Conversation message is missing a valid required "timestamp"' };
-  }
-
-  const attachments = Array.isArray(raw.attachments)
-    ? raw.attachments
-        .filter((a) => a && typeof a.attachmentId === 'string' && typeof a.fileName === 'string')
-        .map((a) => ({ attachmentId: a.attachmentId, fileName: a.fileName }))
-    : [];
-
-  return {
-    message: { messageId, direction: raw.direction, content, timestamp, attachments },
     error: null,
   };
 }
