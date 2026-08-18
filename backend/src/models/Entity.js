@@ -1,63 +1,143 @@
 const mongoose = require('mongoose');
 
 /**
- * A single extracted knowledge-base entity. `entityType` and `data` are
- * intentionally schemaless — Cortex extracts whatever entity types the AI
- * identifies in a document (contact, invoice, appointment, receipt, order,
- * etc.) rather than a fixed, hardcoded set, so `data` shape varies per type.
+ * Entity is the top-level registry of everything Cortex knows — NOT the
+ * complete business object. It stores common metadata + provenance; the
+ * typed child collection (tickets/invoices/payments/events/documents, not
+ * yet implemented) holds the actual domain-specific fields and business
+ * status. The application resolves `type` + `entityId` to fetch the typed
+ * object — Entity does not embed or duplicate it. See decisions.md.
  */
-const EntitySchema = new mongoose.Schema(
-    {
-        userId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User',
-            required: true
-        },
-        entityType: {
-            type: String,
-            required: true,
-            trim: true
-        },
-        data: {
-            type: mongoose.Schema.Types.Mixed,
-            required: true
-        },
-        sourceType: {
-            type: String,
-            enum: ['EMAIL_BODY', 'EMAIL_ATTACHMENT', 'UPLOAD'],
-            required: true
-        },
-        sourceEmailId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'DebitEmailToProcess',
-            default: null
-        },
-        sourceAttachmentId: {
-            type: String,
-            default: null
-        },
-        rawTextSnippet: {
-            type: String,
-            default: null
-        },
-        confidence: {
-            type: Number,
-            default: null
-        },
-        status: {
-            type: String,
-            enum: ['EXTRACTED', 'VALIDATED', 'FAILED'],
-            default: 'EXTRACTED'
-        },
-        extractedAt: {
-            type: Date,
-            default: Date.now
-        }
+
+const ENTITY_TYPES = ['TICKET', 'INVOICE', 'PAYMENT', 'EVENT', 'DOCUMENT'];
+
+// Only EMAIL/GMAIL is implemented today; the shape is kept generic so
+// UPLOAD/API/MANUAL sources can be added later without a schema migration.
+const SOURCE_TYPES = ['EMAIL'];
+const SOURCE_PROVIDERS = ['GMAIL'];
+
+// Describes the state of Cortex's extraction pipeline for this Entity, NOT
+// the business status of the underlying Ticket/Invoice/etc — that lives on
+// the typed child entity only.
+const EXTRACTION_STATUSES = ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED'];
+
+const SourceSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: SOURCE_TYPES,
+      required: true,
     },
-    { timestamps: true, collection: 'entities' }
+    provider: {
+      type: String,
+      enum: SOURCE_PROVIDERS,
+      required: true,
+    },
+    // Application-generated navigation URL back to the original source.
+    // Never set by the AI/extraction layer — see sourceUrlService.js.
+    url: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    // Reference to the temporary `emails` record (not yet implemented —
+    // currently the DebitEmailToProcess collection stands in for it).
+    // Required only when source.type is EMAIL; kept optional at the schema
+    // level so future non-email source types aren't forced to carry it.
+    emailId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'DebitEmailToProcess',
+      required: function () {
+        return this.type === 'EMAIL';
+      },
+    },
+    // Reference to the EmailThread this message belongs to. Same
+    // conditional-required reasoning as emailId.
+    threadId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmailThread',
+      required: function () {
+        return this.type === 'EMAIL';
+      },
+    },
+  },
+  { _id: false }
 );
 
-EntitySchema.index({ userId: 1, entityType: 1 });
-EntitySchema.index({ userId: 1, sourceEmailId: 1 });
+const ExtractionSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: EXTRACTION_STATUSES,
+      required: true,
+      default: 'PENDING',
+    },
+    // Which AI model produced this extraction (e.g. "gemini-1.5-flash").
+    // Not required — meaningless until extraction actually runs.
+    model: {
+      type: String,
+      default: null,
+    },
+    confidence: {
+      type: Number,
+      min: 0,
+      max: 1,
+      default: null,
+    },
+    extractedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
+const EntitySchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    type: {
+      type: String,
+      enum: ENTITY_TYPES,
+      required: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    source: {
+      type: SourceSchema,
+      required: true,
+    },
+    // Reference to the typed child collection determined by `type`
+    // (tickets._id, invoices._id, etc). Deliberately not a Mongoose `ref` —
+    // resolving type + entityId to the right collection is an application
+    // concern (the child collections don't exist yet), not automatic
+    // population. See decisions.md.
+    entityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+    extraction: {
+      type: ExtractionSchema,
+      required: true,
+    },
+  },
+  { timestamps: true, collection: 'entities' }
+);
+
+EntitySchema.index({ userId: 1 });
+EntitySchema.index({ userId: 1, type: 1 });
+EntitySchema.index({ userId: 1, createdAt: -1 });
+EntitySchema.index({ 'source.emailId': 1 });
+EntitySchema.index({ 'source.threadId': 1 });
 
 module.exports = mongoose.model('Entity', EntitySchema);
+module.exports.ENTITY_TYPES = ENTITY_TYPES;
+module.exports.SOURCE_TYPES = SOURCE_TYPES;
+module.exports.SOURCE_PROVIDERS = SOURCE_PROVIDERS;
+module.exports.EXTRACTION_STATUSES = EXTRACTION_STATUSES;
