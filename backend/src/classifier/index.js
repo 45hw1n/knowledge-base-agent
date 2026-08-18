@@ -1,5 +1,5 @@
 const { normalizeEmail, extractDomain } = require('./normalizeEmail');
-const { classify, ACCEPT_THRESHOLD, ENTITY_TYPES } = require('./classifier');
+const { classify, ENTITY_TYPES } = require('./classifier');
 
 /**
  * Convenience wrapper: normalize + classify in one call.
@@ -14,6 +14,5 @@ module.exports = {
   extractDomain,
   classify,
   classifyEmail,
-  ACCEPT_THRESHOLD,
   ENTITY_TYPES,
 };

@@ -4,10 +4,9 @@ const paymentRules = require('./rules/payment.rules');
 const eventRules = require('./rules/event.rules');
 const documentRules = require('./rules/document.rules');
 
-// Fixed, deterministic evaluation order. Also the tie-break priority when
-// two types land on the exact same score (earlier in this list wins) —
-// scoring differences decide almost every real case; this only matters
-// for a true tie.
+// Fixed evaluation order. Ordering has no effect on the result — candidates
+// are sorted by score — it only exists so iteration is deterministic across
+// runs/environments.
 const RULE_SETS = [
   { type: 'INVOICE', rules: invoiceRules },
   { type: 'TICKET', rules: ticketRules },
@@ -15,10 +14,6 @@ const RULE_SETS = [
   { type: 'EVENT', rules: eventRules },
   { type: 'DOCUMENT', rules: documentRules },
 ];
-
-// Minimum combined rule weight required to accept a classification at all.
-// Below this, the email is considered not useful and should be discarded.
-const ACCEPT_THRESHOLD = 0.4;
 
 function scoreRuleSet(normalizedEmail, rules) {
   const matchedRules = [];
@@ -44,34 +39,30 @@ function scoreRuleSet(normalizedEmail, rules) {
 }
 
 /**
- * Classifies a normalized email into one of the known entity types, or
- * signals "no useful match" so the caller can discard it.
+ * Classifies a normalized email into candidate entity types. Regex
+ * identifies signals and proposes candidates — it does not claim to fully
+ * understand the email, so ambiguous emails legitimately produce more than
+ * one candidate (e.g. "Payment failed" scores both PAYMENT and TICKET;
+ * PAYMENT should rank higher given a payment-processor sender + amount +
+ * transaction id, but the weaker TICKET signal is still surfaced rather
+ * than silently dropped).
+ *
+ * An email matching nothing (no candidates) means "not useful — discard".
  *
  * @param {object} normalizedEmail - output of normalizeEmail()
- * @returns {{ type: string|null, confidence: number, matchedRules: string[] }}
+ * @returns {{ candidates: Array<{ type: string, score: number, matchedRules: string[] }> }}
  */
 function classify(normalizedEmail) {
-  let best = null;
-
-  for (const { type, rules } of RULE_SETS) {
+  const candidates = RULE_SETS.map(({ type, rules }) => {
     const { score, matchedRules } = scoreRuleSet(normalizedEmail, rules);
+    return { type, score: Math.min(1, Number(score.toFixed(2))), matchedRules };
+  })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score);
 
-    if (score >= ACCEPT_THRESHOLD && (!best || score > best.score)) {
-      best = { type, score, matchedRules };
-    }
-  }
-
-  if (!best) {
-    return { type: null, confidence: 0, matchedRules: [] };
-  }
-
-  return {
-    type: best.type,
-    confidence: Math.min(1, Number(best.score.toFixed(2))),
-    matchedRules: best.matchedRules,
-  };
+  return { candidates };
 }
 
 const ENTITY_TYPES = RULE_SETS.map((r) => r.type);
 
-module.exports = { classify, ACCEPT_THRESHOLD, ENTITY_TYPES };
+module.exports = { classify, ENTITY_TYPES };
