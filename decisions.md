@@ -544,3 +544,87 @@ the current `Entity` model per the prior phase's flagged conflicts), so
 adding Event to a currently-broken surface was skipped rather than compounding
 an already-flagged gap. Will be addressed alongside fixing that surface once
 enough typed entities exist to make the fix meaningful.
+
+---
+
+## Document Entity (second typed child entity)
+
+### Decision: Attachment references reuse the existing `attachmentId`/`fileName` naming, not the spec's illustrative `fileId`/`filename`
+
+**Context:** The instruction explicitly said to inspect the existing
+attachment/file representation before introducing `fileId`, and reuse it if
+one exists.
+
+**Reasoning:** Found `models/schemas/AttachmentSchema.js` and
+`services/attachments/attachmentService.js` — the app-wide convention is
+`attachmentId` (the attachment sub-document's `_id`) and `fileName`
+(camelCase), not `fileId`/`filename`. `Document.attachments[]` uses this
+existing vocabulary instead.
+
+**Important nuance surfaced:** there is no single, currently-working
+"Attachment" collection to hard-reference. The attachment entity-handler
+registry (`services/attachments/entityHandlers/index.js`) that owns real
+attachment records is presently **all `NOT_IMPLEMENTED` stubs**
+(`RECURRING_PAYMENT`/`PROFILE`/`WORKSPACE`, none reachable) — and
+separately, the classifier/orchestrator pipeline fetches email attachments
+live from Gmail rather than persisting them through that system at all (a
+decision from the Entity-extraction phase). So reusing the *naming*
+convention was straightforward; there is no real attachment record to
+Mongoose-`ref` yet either way. `attachmentId` is stored as a plain string
+reference, resolved at the application layer — same pattern as
+`Entity.entityId` and `Event.attachments[].documentId` — not a hard
+dependency on a collection that doesn't functionally exist yet.
+
+### Decision: `party.role` is a free-form string, not an enum
+
+**Context:** The spec lists a suggested vocabulary (`CUSTOMER`, `VENDOR`,
+`PARTNER`, `ISSUER`, `RECIPIENT`, `LICENSOR`, `LICENSEE`, `OTHER`) but also
+explicitly says the role "should remain flexible because different document
+types have different relationships" and to never force a role the source
+doesn't clearly support.
+
+**Reasoning:** This is a genuine, explicit exception to the pattern used
+everywhere else in this Entity/Event/Document work (`type`, `sourceType`
+are all hard enums). Enforcing the suggested vocabulary as a Mongoose enum
+would directly contradict "remain flexible" the moment a real document uses
+a relationship outside that list (e.g. "WITNESS", "GUARANTOR"). `role` is
+validated only as an optional trimmed string.
+
+### Decision: `summary`'s 300-500 word target is a generation instruction, not a schema constraint
+
+**Reasoning:** `summary` is required and non-empty at the schema level, but
+there is no hard word-count validator that would reject a document for
+being "too short" or "too long." A genuinely short source document (e.g. a
+one-line certificate renewal notice) producing a short, accurate summary
+must never be forced to pad itself to hit a word target — that would
+directly contradict "do not invent information... omit it rather than
+guessing," which the same spec explicitly requires. Instead,
+`validateExtractedDocument()` logs a `console.warn` (matching the existing
+`postProcessor.js` pattern for other non-fatal extraction concerns) when a
+summary is far outside the 300-500 word range, without rejecting it —
+visibility without a false rejection.
+
+### Decision: No Document-specific extraction prompt was written
+
+**Reasoning:** Same precedent as `Event`'s `validateExtractedEvent` — the
+current orchestrator (`ai/features/extractEntities/prompt.js`) is generic
+and type-agnostic, and is itself being superseded by the classifier-driven
+pipeline. `validateExtractedDocument()` was built standalone (pure, tested,
+never throws) as the eventual target shape for a Document-specific
+extraction prompt, including the 300-500 word summary instruction encoded
+as `SUMMARY_WORD_TARGET` for that future prompt to reference — but no new
+prompt-builder file was created, since there is no Document-aware
+orchestrator yet to wire it into. **Flagging explicitly, again**: say so if
+live wiring is actually wanted now rather than continuing to build
+standalone, tested pieces.
+
+### Decision: Same ID / TypeScript / GraphQL calls as the Event phase, for the same reasons
+
+- `_id` (Mongoose ObjectId), not a prefixed string like `doc_123` — no
+  precedent anywhere in this codebase for prefixed string IDs.
+- No new TypeScript files — the backend has no real TypeScript anywhere
+  (verified again; unchanged since the Event phase).
+- No GraphQL exposure added — the `entities`/`entity` surface is still
+  broken from the `Entity` model replacement two phases ago; adding
+  `Document` to it now would compound an already-flagged, unfixed gap
+  rather than resolve it.
