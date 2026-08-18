@@ -7,7 +7,7 @@ export default function PrivacyPolicyPage() {
         to="/"
         className="mb-8 inline-flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
       >
-        &larr; Back to Fynverse
+        &larr; Back to Cortex
       </Link>
 
       <h1 className="mb-2 text-3xl font-bold tracking-tight">Privacy Policy</h1>
@@ -19,14 +19,14 @@ export default function PrivacyPolicyPage() {
         <section>
           <h2 className="mb-3 text-xl font-semibold">1. Introduction</h2>
           <p>
-            Fynverse (&quot;we,&quot; &quot;us,&quot; or &quot;our&quot;) is a personal finance
-            tracking application that helps you understand your spending by
-            automatically extracting transaction information from your email. This
-            Privacy Policy explains what information we collect, how we use it, and
-            the choices you have.
+            Cortex (&quot;we,&quot; &quot;us,&quot; or &quot;our&quot;) is a personal
+            knowledge base application that helps you organize information by
+            ingesting your emails and attachments and extracting structured
+            entities from them. This Privacy Policy explains what information we
+            collect, how we use it, and the choices you have.
           </p>
           <p className="mt-2">
-            By using Fynverse, you agree to the collection and use of information
+            By using Cortex, you agree to the collection and use of information
             in accordance with this policy. If you do not agree, please do not use
             the service.
           </p>
@@ -50,58 +50,36 @@ export default function PrivacyPolicyPage() {
           <h3 className="mb-2 mt-4 font-medium">2.2 Gmail Data</h3>
           <p>
             With your explicit consent, we access your Gmail inbox in{" "}
-            <strong>read-only</strong> mode. Fynverse processes only emails that
-            are automatically identified as likely financial transaction
-            notifications (such as bank alerts, payment confirmations, or UPI
-            receipts). Emails that are not identified as financial transactions
-            are not processed or stored.
+            <strong>read-only</strong> mode. Cortex processes emails (and, where
+            present, their attachments) to build your personal knowledge base.
           </p>
           <p className="mt-2">
-            From qualifying transaction emails, we extract:
+            From processed emails, we extract:
           </p>
           <ul className="mt-2 list-inside list-disc space-y-1 pl-4">
             <li>Sender address</li>
             <li>Email subject line</li>
             <li>Date of the email</li>
-            <li>Email body text (used for transaction extraction, stored in encrypted form)</li>
+            <li>Email body text and attachments (used for entity extraction, stored in encrypted form)</li>
             <li>Gmail message ID and thread ID</li>
           </ul>
 
-          <h3 className="mb-2 mt-4 font-medium">2.3 Extracted Transaction Data</h3>
+          <h3 className="mb-2 mt-4 font-medium">2.3 Extracted Entity Data</h3>
           <p>
-            From qualifying emails, we extract and store structured financial data
-            including:
-          </p>
-          <ul className="mt-2 list-inside list-disc space-y-1 pl-4">
-            <li>Transaction amount and currency</li>
-            <li>Merchant name</li>
-            <li>Transaction date and time</li>
-            <li>Payment mode (UPI, credit card, debit card, etc.)</li>
-            <li>Transaction category and subcategory</li>
-            <li>Reference or transaction IDs from the email</li>
-          </ul>
-
-          <h3 className="mb-2 mt-4 font-medium">2.4 User-Provided Financial Information</h3>
-          <p>
-            You may optionally add your own financial instruments for better
-            transaction matching:
-          </p>
-          <ul className="mt-2 list-inside list-disc space-y-1 pl-4">
-            <li>Bank account details (name, bank, last 4 digits of account number, UPI IDs, debit card last 4 digits)</li>
-            <li>Credit card details (name, bank, last 4 digits, billing cycle day)</li>
-          </ul>
-          <p className="mt-2">
-            We never ask for or store full account numbers, card numbers, CVVs, PINs,
-            or passwords.
+            From processed emails and attachments, we extract and store
+            structured entities and their fields, along with a reference back to
+            the source email or attachment they came from. The specific entity
+            types and fields extracted are configurable and may evolve as the
+            Service does.
           </p>
 
-          <h3 className="mb-2 mt-4 font-medium">2.5 Preferences</h3>
+          <h3 className="mb-2 mt-4 font-medium">2.4 Preferences</h3>
           <p>
-            We store user preferences such as salary cycle day, monthly budget,
-            email sync start date, and Google Sheet integration settings.
+            We store user preferences such as your email sync start date and
+            auto-processing settings.
           </p>
 
-          <h3 className="mb-2 mt-4 font-medium">2.6 Authentication Tokens</h3>
+          <h3 className="mb-2 mt-4 font-medium">2.5 Authentication Tokens</h3>
           <p>
             We store Google OAuth access and refresh tokens to maintain your
             session and access your Gmail on your behalf. These tokens are
@@ -114,7 +92,7 @@ export default function PrivacyPolicyPage() {
             3. Use of Google User Data
           </h2>
           <p>
-            Fynverse&apos;s use and transfer of information received from Google
+            Cortex&apos;s use and transfer of information received from Google
             APIs adheres to the{" "}
             <a
               href="https://developers.google.com/terms/api-services-user-data-policy"
@@ -127,28 +105,26 @@ export default function PrivacyPolicyPage() {
             , including the Limited Use requirements.
           </p>
           <p className="mt-2">
-            Fynverse strictly adheres to Google&apos;s Limited Use requirements.
+            Cortex strictly adheres to Google&apos;s Limited Use requirements.
             Data obtained from Google APIs is used solely to provide user-facing
-            features within the application, specifically automated transaction
-            tracking. This data is not used for advertising, marketing, or any
+            features within the application, specifically building your personal
+            knowledge base. This data is not used for advertising, marketing, or any
             secondary purposes, and is never sold or shared with third parties.
           </p>
 
           <h3 className="mb-2 mt-4 font-medium">3.1 Why We Need Gmail Access</h3>
           <p>
-            Fynverse requires read-only access to your Gmail to automatically
-            detect and extract transaction-related emails (bank alerts, payment
-            confirmations, UPI notifications, etc.) so you don&apos;t have to
-            manually enter every expense.
+            Cortex requires read-only access to your Gmail to ingest emails and
+            attachments and extract structured knowledge from them, so you don&apos;t
+            have to manually organize this information yourself.
           </p>
 
           <h3 className="mb-2 mt-4 font-medium">3.2 What Data Is Extracted</h3>
           <p>
-            We only process emails that our heuristic system identifies as likely
-            financial transactions. From those emails, we extract transaction
-            details such as amount, merchant, date, and payment method. The
-            processed email body text is stored in AES-256-GCM encrypted form and
-            automatically deleted after 30 days.
+            We process emails (and attachments, where present) to extract
+            structured entities and their fields. The processed email body text
+            is stored in AES-256-GCM encrypted form and automatically deleted
+            after 30 days.
           </p>
 
           <h3 className="mb-2 mt-4 font-medium">3.3 What We Do NOT Do</h3>
@@ -157,7 +133,6 @@ export default function PrivacyPolicyPage() {
             <li>We do <strong>not</strong> sell, rent, or trade your Gmail data to any third party.</li>
             <li>We do <strong>not</strong> use your Gmail data to build user profiles for advertising.</li>
             <li>We do <strong>not</strong> allow humans to read your emails, except where necessary for security purposes, to comply with applicable law, or with your explicit consent.</li>
-            <li>We do <strong>not</strong> read or store non-financial emails.</li>
           </ul>
 
           <h3 className="mb-2 mt-4 font-medium">3.4 Google Scopes Requested</h3>
@@ -168,12 +143,8 @@ export default function PrivacyPolicyPage() {
               account.
             </li>
             <li>
-              <strong>Gmail (read-only)</strong> — to read transaction-related
-              emails from your inbox.
-            </li>
-            <li>
-              <strong>Google Sheets</strong> — to optionally export your
-              transactions to a Google Sheet you designate.
+              <strong>Gmail (read-only)</strong> — to read emails and attachments
+              for knowledge extraction.
             </li>
           </ul>
 
@@ -190,37 +161,31 @@ export default function PrivacyPolicyPage() {
         <section>
           <h2 className="mb-3 text-xl font-semibold">4. How We Use Your Information</h2>
           <ul className="list-inside list-disc space-y-1 pl-4">
-            <li>To create and manage your Fynverse account.</li>
-            <li>To identify and extract financial transactions from your email.</li>
-            <li>To categorize and organize your transactions automatically.</li>
-            <li>To optionally sync your transactions to a Google Sheet.</li>
-            <li>To provide you with personal spending insights.</li>
-            <li>To improve the accuracy of our transaction detection and extraction.</li>
+            <li>To create and manage your Cortex account.</li>
+            <li>To ingest and process your emails and attachments.</li>
+            <li>To extract, validate, and organize structured entities from that content.</li>
+            <li>To let you search and query your extracted knowledge base.</li>
+            <li>To improve the accuracy of our document parsing and entity extraction.</li>
           </ul>
         </section>
 
         <section>
           <h2 className="mb-3 text-xl font-semibold">5. AI-Assisted Processing</h2>
           <p>
-            Fynverse uses third-party AI services (currently OpenAI and/or Google
-            Gemini) to extract structured transaction data from email content. When
-            processing an email, the following information may be sent to the AI
-            provider:
+            Cortex uses third-party AI services (currently OpenAI and/or Google
+            Gemini) and Google Document AI to extract structured entity data from
+            email and attachment content. When processing an email or document,
+            the following information may be sent to these providers:
           </p>
           <ul className="mt-2 list-inside list-disc space-y-1 pl-4">
-            <li>Email subject, sender, date, and body text of transaction emails.</li>
-            <li>Your configured spending categories.</li>
-            <li>
-              Partial payment instrument information (bank names, last 4 digits,
-              UPI IDs) for matching purposes.
-            </li>
+            <li>Email subject, sender, date, and body text.</li>
+            <li>Attachment content, for document parsing and OCR.</li>
           </ul>
           <p className="mt-2">
             We use third-party AI providers that operate under strict data
             protection agreements. These providers do not use your data for model
             training or advertising purposes. We ensure that any data shared with
-            such providers is limited to what is necessary for transaction
-            extraction.
+            such providers is limited to what is necessary for entity extraction.
           </p>
         </section>
 
@@ -249,9 +214,9 @@ export default function PrivacyPolicyPage() {
               <strong>30 days</strong>.
             </li>
             <li>
-              <strong>Extracted transaction records</strong> are retained for as
-              long as your account is active, so you can view your historical
-              spending data.
+              <strong>Extracted entity records</strong> are retained for as
+              long as your account is active, so your knowledge base stays
+              queryable.
             </li>
             <li>
               <strong>Account data</strong> is retained for as long as your
@@ -264,16 +229,16 @@ export default function PrivacyPolicyPage() {
         <section>
           <h2 className="mb-3 text-xl font-semibold">8. Third-Party Services</h2>
           <p>
-            Fynverse integrates with the following third-party services:
+            Cortex integrates with the following third-party services:
           </p>
           <ul className="mt-2 list-inside list-disc space-y-1 pl-4">
             <li>
               <strong>Google APIs</strong> — for authentication, Gmail access,
-              Sheets export, and Pub/Sub notifications.
+              Document AI, and Pub/Sub notifications.
             </li>
             <li>
-              <strong>OpenAI / Google Gemini</strong> — for AI-powered transaction
-              extraction from email content.
+              <strong>OpenAI / Google Gemini</strong> — for AI-powered entity
+              extraction from email and document content.
             </li>
             <li>
               <strong>MongoDB Atlas</strong> — for database hosting.
@@ -302,11 +267,11 @@ export default function PrivacyPolicyPage() {
             </li>
             <li>
               <strong>Deletion</strong> — Request deletion of your account and all
-              associated data. We will delete your account data, transaction
-              records, and any stored email data.
+              associated data. We will delete your account data, extracted
+              entity records, and any stored email data.
             </li>
             <li>
-              <strong>Revoke Access</strong> — You can revoke Fynverse&apos;s
+              <strong>Revoke Access</strong> — You can revoke Cortex&apos;s
               access to your Google account at any time through your{" "}
               <a
                 href="https://myaccount.google.com/permissions"
@@ -318,10 +283,6 @@ export default function PrivacyPolicyPage() {
               </a>
               .
             </li>
-            <li>
-              <strong>Export</strong> — You can export your transaction data to
-              Google Sheets at any time through the app.
-            </li>
           </ul>
           <p className="mt-2">
             To exercise any of these rights, please contact us at the email address
@@ -332,7 +293,7 @@ export default function PrivacyPolicyPage() {
         <section>
           <h2 className="mb-3 text-xl font-semibold">10. Children&apos;s Privacy</h2>
           <p>
-            Fynverse is not intended for use by anyone under the age of 18. We do
+            Cortex is not intended for use by anyone under the age of 18. We do
             not knowingly collect personal information from children. If you
             believe a child has provided us with personal data, please contact us
             and we will promptly delete it.
@@ -356,23 +317,24 @@ export default function PrivacyPolicyPage() {
             please contact us at:
           </p>
           <p className="mt-2">
+            {/* TODO: replace with real contact */}
             <strong>Email:</strong>{" "}
             <a
-              href="mailto:ashwin.fynverse@gmail.com"
+              href="mailto:support@cortex.app"
               className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
             >
-              ashwin.fynverse@gmail.com
+              support@cortex.app
             </a>
           </p>
           <p className="mt-1">
             <strong>Website:</strong>{" "}
             <a
-              href="https://fynverse.app"
+              href="https://cortex.app"
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
             >
-              https://fynverse.app
+              https://cortex.app
             </a>
           </p>
         </section>

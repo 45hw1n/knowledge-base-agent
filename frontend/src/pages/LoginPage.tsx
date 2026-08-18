@@ -11,7 +11,7 @@ export default function LoginPage() {
       </div>
 
       <footer className="mt-auto w-full px-6 pb-6 text-right text-xs text-muted-foreground md:px-10 md:pb-8">
-        <p>&copy; 2026 Fynverse</p>
+        <p>&copy; 2026 Cortex</p>
         <p className="mt-0.5">
           <Link to="/privacy" className="transition-colors hover:text-foreground">
             Privacy Policy

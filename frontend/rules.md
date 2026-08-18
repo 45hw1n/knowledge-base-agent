@@ -1,6 +1,6 @@
-# Fynverse Frontend Rules (rules.md)
+# Cortex Frontend Rules (rules.md)
 
-This document defines **strict coding rules** for the Fynverse frontend.
+This document defines **strict coding rules** for the Cortex frontend.
 
 All AI coding assistants must follow these rules when generating or modifying code.
 

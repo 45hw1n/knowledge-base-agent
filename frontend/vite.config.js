@@ -26,8 +26,8 @@ export default defineConfig(({ mode }) => {
       host: host,
       port: 5173,
       https: {
-        key: fs.readFileSync('./certs/dev.fynverse.app-key.pem'),
-        cert: fs.readFileSync('./certs/dev.fynverse.app.pem'),
+        key: fs.readFileSync('./certs/dev.cortex.app-key.pem'),
+        cert: fs.readFileSync('./certs/dev.cortex.app.pem'),
       }
     },
   }

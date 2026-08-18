@@ -1,7 +1,7 @@
 import { useMutation } from "@apollo/client";
 import { Home, LogOut, Settings } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
-import FynverseLogo from "@/assets/fynverse-logo.svg";
+import CortexLogo from "@/assets/cortex-logo.svg";
 import { LOGOUT } from "@/graphql/query/auth/authQueries";
 import { apolloClient } from "@/lib/apollo";
 import {
@@ -77,8 +77,8 @@ export function AppSidebar() {
           )}
         >
           <img
-            src={FynverseLogo}
-            alt="Fynverse"
+            src={CortexLogo}
+            alt="Cortex"
             className={cn(
               "h-6 w-auto shrink-0 transition-all duration-200 ease-linear",
               "group-data-[collapsible=icon]:hidden"
@@ -91,7 +91,7 @@ export function AppSidebar() {
               "group-data-[collapsible=icon]:flex"
             )}
           >
-            F
+            C
           </span>
         </Link>
         {/* <SidebarCollapseTrigger className="hidden md:flex" /> */}

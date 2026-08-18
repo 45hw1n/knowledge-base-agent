@@ -1,6 +1,6 @@
-# Fynverse Frontend Skill Context (skill.md)
+# Cortex Frontend Skill Context (skill.md)
 
-This document defines the **frontend architecture, product context, and development patterns** for the Fynverse React application.
+This document defines the **frontend architecture, product context, and development patterns** for the Cortex React application.
 
 All AI coding assistants must follow these guidelines when generating code.
 

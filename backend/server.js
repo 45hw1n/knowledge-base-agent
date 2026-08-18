@@ -81,8 +81,8 @@ const startServer = async () => {
     if (process.env.NODE_ENV === 'local') {
       // HTTPS options
       const httpsOptions = {
-        key: fs.readFileSync('./certs/dev.fynverse.app-key.pem'),
-        cert: fs.readFileSync('./certs/dev.fynverse.app.pem'),
+        key: fs.readFileSync('./certs/dev.cortex.app-key.pem'),
+        cert: fs.readFileSync('./certs/dev.cortex.app.pem'),
       };
 
       https.createServer(httpsOptions, app).listen(PORT, () => {

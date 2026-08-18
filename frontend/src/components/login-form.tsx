@@ -60,7 +60,7 @@ export function LoginForm({
           <div className="relative hidden md:block aspect-[737/1024]">
             <img
               src="/images/final-bg.png"
-              alt="Finance Tracking on Auto-pilot"
+              alt="Cortex knowledge base"
               className="absolute inset-0 h-full w-full object-cover"
             />
           </div>
@@ -72,11 +72,11 @@ export function LoginForm({
             <div className="flex flex-col gap-8 w-full max-w-sm">
               <div className="flex flex-col items-center text-center gap-2">
                 <h1 className="text-2xl font-bold tracking-tight">
-                  Login to Fynverse
+                  Login to Cortex
                 </h1>
                 <p className="text-sm text-foreground leading-relaxed">
-                  Automatically track your transactions and get smart financial
-                  insights.
+                  Your knowledge base for email intelligence — ingest, extract,
+                  and query.
                 </p>
               </div>
 
@@ -116,12 +116,12 @@ export function LoginForm({
 
               <div className="flex flex-col gap-1.5 mt-2 opacity-60">
                 <p className="text-center text-xs leading-relaxed">
-                  For the most accurate insights, connect the email linked to
-                  your bank transactions.
+                  Connect your Gmail so Cortex can ingest and extract
+                  structured knowledge from your emails.
                 </p>
                 <p className="text-center text-xs leading-relaxed">
-                  🔒 Your data is encrypted, secure, and used only to generate
-                  insights.
+                  🔒 Your data is encrypted, secure, and used only to build
+                  your knowledge base.
                 </p>
               </div>
             </div>

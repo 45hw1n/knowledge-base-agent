@@ -11,9 +11,9 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://dev.fynverse.app",
-  "https://dev.fynverse.app:5173",
-  "https://fynverse.app",
+  "https://dev.cortex.app",
+  "https://dev.cortex.app:5173",
+  "https://cortex.app",
 ];
 
 if (process.env.CLIENT_URL && !allowedOrigins.includes(process.env.CLIENT_URL)) {
@@ -77,7 +77,7 @@ const sessionConfig = {
     httpOnly: true,
     secure: true,              // always true (all envs are HTTPS now)
     sameSite: 'none',          // always needed for cross-subdomain
-    domain: '.fynverse.app',   // critical for sharing across subdomains
+    domain: '.cortex.app',   // critical for sharing across subdomains
     maxAge: Number(process.env.SESSION_MAX_AGE) || 604800000
   },
 };
