@@ -9,6 +9,7 @@ function validTicketEntity(overrides = {}) {
   return new Entity({
     userId: objectId(),
     type: 'TICKET',
+    displayId: 'TKT-001',
     title: 'Unable to login into Gmail',
     source: {
       type: 'EMAIL',
@@ -110,7 +111,7 @@ describe('Entity — extraction.confidence', () => {
 });
 
 describe('Entity — required top-level fields', () => {
-  it.each(['userId', 'type', 'title', 'source', 'entityId', 'extraction'])('requires %s', (field) => {
+  it.each(['userId', 'type', 'displayId', 'title', 'source', 'entityId', 'extraction'])('requires %s', (field) => {
     const error = validTicketEntity({ [field]: undefined }).validateSync();
     expect(error?.errors?.[field]).toBeDefined();
   });
@@ -176,5 +177,27 @@ describe('Entity — source', () => {
 
   it('does not have a source.description field in the schema', () => {
     expect(Entity.schema.path('source.description')).toBeUndefined();
+  });
+});
+
+describe('Entity — displayId', () => {
+  it('preserves a well-formed displayId', () => {
+    const entity = validTicketEntity({ displayId: 'TKT-007' });
+    expect(entity.validateSync()).toBeUndefined();
+    expect(entity.displayId).toBe('TKT-007');
+  });
+
+  it('has a prefix defined for every entity type', () => {
+    for (const type of Entity.ENTITY_TYPES) {
+      expect(Entity.ENTITY_TYPE_PREFIXES[type]).toBeDefined();
+      expect(typeof Entity.ENTITY_TYPE_PREFIXES[type]).toBe('string');
+    }
+  });
+
+  it('has a unique index scoped to (userId, displayId), not globally unique', () => {
+    const indexes = Entity.schema.indexes();
+    const displayIdIndex = indexes.find(([keys]) => keys.userId === 1 && keys.displayId === 1);
+    expect(displayIdIndex).toBeDefined();
+    expect(displayIdIndex[1].unique).toBe(true);
   });
 });

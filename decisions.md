@@ -1128,3 +1128,68 @@ next kind of "AI-extraction-adjacent but still deterministic" work in the
 same shape as the payment reconciliation service, flagged the same way
 every prior phase's missing piece has been.
 
+---
+
+## Entity.displayId
+
+### Decision: `displayId` lives only on `Entity`, not duplicated onto the typed children
+
+**Reasoning:** Same "derive, don't duplicate" principle applied throughout
+— anything that already has an Entity record (which is how `type` +
+`entityId` get resolved to the typed child in the first place) already has
+access to `entity.displayId` without needing a second copy stored on
+`Ticket`/`Invoice`/etc.
+
+### Decision: The type→prefix mapping is an explicit table, not a substring of the type name
+
+**Reasoning:** `EVENT`'s natural abbreviation is `EVT`, not the first three
+letters `EVE`; `TICKET`'s is `TKT`, not `TIC`. Blind truncation would
+produce unreadable or misleading prefixes for at least two of the five
+types. `ENTITY_TYPE_PREFIXES` (in `Entity.js`, next to `ENTITY_TYPES`) is
+the single source of truth `displayIdService.js` reads from.
+
+### Decision: Sequences are scoped per `(userId, type)`, not global
+
+**Reasoning:** A single global counter per type would make the numbers
+meaningless to any individual user (why is my first ticket "TKT-047"?) and
+would leak cross-user volume information (how many tickets has anyone
+ever created). Each user gets their own "TKT-001, TKT-002, ..." series per
+type — the counter key is `"<userId>:<type>"`.
+
+### Decision: A new `Counter` model + `displayIdService.generateDisplayId()` — the first non-pure function added in this whole Entity/Ticket/Invoice/Payment body of work
+
+**Reasoning:** Every other `validateExtracted*`/`determine*` function
+built across these phases is a pure, synchronous, DB-independent function
+— deliberately testable via `validateSync()` or plain assertions with zero
+setup. A truly sequential, gap-free, collision-free number cannot be
+generated that way — it requires a coordinated database write. Rather than
+the unsafe `Entity.countDocuments({userId, type}) + 1` approach (racy under
+concurrency: two simultaneous creates could both read the same count and
+both try to use the same next number), `generateDisplayId()` uses the
+standard MongoDB atomic-counter pattern: `findOneAndUpdate` with `$inc` and
+`upsert: true` on a dedicated `Counter` document. MongoDB serializes
+concurrent `$inc` operations on the same document, so no duplicate-key
+retry logic is needed here (contrast with `EmailThread.findOrCreateThread`,
+which does need one — that function is racing to *create* a new document;
+this one is only ever *incrementing* an existing/upserted one, a
+fundamentally race-free operation by construction).
+
+**Tested the same way as every other DB-touching piece in this codebase**:
+`Counter` is `jest.mock`'d (no in-memory Mongo exists anywhere here),
+verifying the exact `$inc`/`upsert` call shape and the resulting
+`PREFIX-NNN` string, rather than exercising a real database.
+
+### Decision: Padding is a minimum, not a fixed width — "TKT-1000" after 999, never truncated or reset
+
+**Reasoning:** Zero-padding to 3 digits (`TKT-001`) is purely cosmetic
+below 1000; forcing a fixed 3-character numeric field would either
+truncate a 4-digit sequence or require a schema change once any user's
+count of one entity type exceeds 999. `String(seq).padStart(3, '0')`
+naturally produces `"1000"` unpadded once it's already ≥3 digits — verified
+with a test specifically for the 1000th ticket.
+
+### Decision: `Entity.displayId` uniqueness is scoped to `(userId, displayId)`, matching the `EmailThread` precedent
+
+Same reasoning already applied to `EmailThread.providerThreadId`: a
+per-user unique index, not a global one — two different users legitimately
+having their own "TKT-001" is expected and correct, not a collision.
