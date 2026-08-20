@@ -1,6 +1,8 @@
+import { Loader2 } from "lucide-react";
+import { useQuery } from "@apollo/client";
 import { ResponsiveSheet } from "@/components/ResponsiveSheet";
-import type { Entity } from "@/mocks/entities.types";
-import { ticketsMock, invoicesMock, paymentsMock, eventsMock, documentsMock } from "@/mocks";
+import type { Entity, Invoice, Payment, Ticket, CalendarEvent, KnowledgeDocument } from "@/mocks/entities.types";
+import { GET_ENTITY_DETAIL } from "@/graphql/query/entities/entitiesQueries";
 import { EntityTypeBadge } from "./entityDisplay";
 import { TicketDetail } from "./details/TicketDetail";
 import { InvoiceDetail } from "./details/InvoiceDetail";
@@ -13,6 +15,26 @@ interface EntityDetailSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
+// The union response is discriminated by __typename (the GraphQL type name,
+// e.g. "Invoice"/"Event"), not `entity.type` (the lightweight registry's
+// enum value, e.g. "INVOICE"/"EVENT") — the two happen to overlap in
+// meaning but are spelled differently, so __typename is what's switched on.
+//
+// Ticket.status/Document.summary/Document.attachments are aliased in the
+// query (ticketStatus/documentSummary/documentAttachments) because GraphQL
+// rejects same-named fields with different types colliding across union
+// members (status: InvoiceStatus! vs TicketStatus!, etc.) — mapped back to
+// the plain field names below before handing off to the detail components.
+type EntityDetailResult =
+  | ({ __typename: "Invoice" } & Invoice)
+  | ({ __typename: "Payment" } & Payment)
+  | ({ __typename: "Ticket" } & Omit<Ticket, "status"> & { ticketStatus: Ticket["status"] })
+  | ({ __typename: "Event" } & CalendarEvent)
+  | ({ __typename: "Document" } & Omit<KnowledgeDocument, "summary" | "attachments"> & {
+        documentSummary: KnowledgeDocument["summary"];
+        documentAttachments: KnowledgeDocument["attachments"];
+      });
 
 // Both the badge row and the title text live inside `title` (rendered as
 // SheetTitle/DrawerTitle, a heading) rather than splitting the badge into
@@ -35,33 +57,43 @@ export function EntityDetailSheet({ entity, open, onOpenChange }: EntityDetailSh
         )
       }
     >
-      {entity && <EntityDetailBody entity={entity} />}
+      {entity && open && <EntityDetailBody entityId={entity.id} />}
     </ResponsiveSheet>
   );
 }
 
-function EntityDetailBody({ entity }: { entity: Entity }) {
-  switch (entity.type) {
-    case "TICKET": {
-      const ticket = ticketsMock.find((t) => t.id === entity.entityId);
-      return ticket ? <TicketDetail ticket={ticket} /> : <NotFound />;
-    }
-    case "INVOICE": {
-      const invoice = invoicesMock.find((i) => i.id === entity.entityId);
-      return invoice ? <InvoiceDetail invoice={invoice} /> : <NotFound />;
-    }
-    case "PAYMENT": {
-      const payment = paymentsMock.find((p) => p.id === entity.entityId);
-      return payment ? <PaymentDetail payment={payment} /> : <NotFound />;
-    }
-    case "EVENT": {
-      const event = eventsMock.find((e) => e.id === entity.entityId);
-      return event ? <EventDetail event={event} /> : <NotFound />;
-    }
-    case "DOCUMENT": {
-      const doc = documentsMock.find((d) => d.id === entity.entityId);
-      return doc ? <DocumentDetail doc={doc} /> : <NotFound />;
-    }
+function EntityDetailBody({ entityId }: { entityId: string }) {
+  const { data, loading } = useQuery<{ entityDetail: EntityDetailResult | null }>(GET_ENTITY_DETAIL, {
+    variables: { id: entityId },
+    fetchPolicy: "network-only",
+  });
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  const detail = data?.entityDetail;
+  if (!detail) return <NotFound />;
+
+  switch (detail.__typename) {
+    case "Ticket":
+      return <TicketDetail ticket={{ ...detail, status: detail.ticketStatus }} />;
+    case "Invoice":
+      return <InvoiceDetail invoice={detail} />;
+    case "Payment":
+      return <PaymentDetail payment={detail} />;
+    case "Event":
+      return <EventDetail event={detail} />;
+    case "Document":
+      return (
+        <DocumentDetail
+          doc={{ ...detail, summary: detail.documentSummary, attachments: detail.documentAttachments }}
+        />
+      );
     default:
       return <NotFound />;
   }

@@ -1,6 +1,5 @@
 import { Badge } from "@/lib/ui/badge";
 import type { Payment, PaymentLinkMethod, InvoiceStatus } from "@/mocks/entities.types";
-import { invoicesMock } from "@/mocks";
 import { formatDateTime, formatMoney } from "./format";
 import { DetailField, DetailGrid, PersonLine, SectionHeading, SourceFooter } from "./shared";
 
@@ -18,7 +17,7 @@ const INVOICE_STATUS_BADGE: Record<InvoiceStatus, string> = {
 };
 
 export function PaymentDetail({ payment }: { payment: Payment }) {
-  const invoice = payment.invoiceId ? invoicesMock.find((i) => i.id === payment.invoiceId) : null;
+  const invoice = payment.invoice ?? null;
 
   return (
     <div className="space-y-6">

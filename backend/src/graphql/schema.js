@@ -164,36 +164,255 @@ const typeDefs = gql`
     cached: Boolean!
   }
 
+  enum EntityType {
+    TICKET
+    INVOICE
+    PAYMENT
+    EVENT
+    DOCUMENT
+  }
+
+  enum ExtractionStatus {
+    PENDING
+    PROCESSING
+    SUCCESS
+    FAILED
+  }
+
+  type EntitySource {
+    type: String!
+    provider: String!
+    url: String!
+    emailId: ID
+    threadId: ID
+  }
+
+  type EntityExtraction {
+    status: ExtractionStatus!
+    model: String
+    confidence: Float
+    extractedAt: String
+  }
+
   """
-  An extracted knowledge-base entity. entityType and data are intentionally
-  open-ended — Cortex extracts whatever entity types the AI identifies in a
-  document rather than a fixed set, so data's shape varies by entityType.
+  The top-level registry of everything Cortex knows — NOT the complete
+  business object. Resolve type + entityId (via the entityDetail query) to
+  fetch the typed Invoice/Payment/Ticket/Event/Document.
   """
   type Entity {
     id: ID!
-    entityType: String!
-    data: JSON!
-    sourceType: String!
-    sourceEmailId: ID
-    sourceAttachmentId: String
-    rawTextSnippet: String
-    confidence: Float
-    status: String!
-    extractedAt: String
+    userId: ID!
+    type: EntityType!
+    displayId: String!
+    title: String!
+    source: EntitySource!
+    entityId: ID!
+    extraction: EntityExtraction!
     createdAt: String
     updatedAt: String
   }
 
   enum EntityListField {
     id
-    entityType
-    status
+    type
+    displayId
+    title
     sourceType
-    sourceEmailId
-    confidence
+    extractionStatus
+    extractionConfidence
     extractedAt
     createdAt
   }
+
+  type Person {
+    name: String
+    email: String
+  }
+
+  type Money {
+    value: Float!
+    currency: String
+  }
+
+  type AttachmentRef {
+    attachmentId: String!
+    fileName: String!
+  }
+
+  enum ConversationDirection {
+    SENT
+    RECEIVED
+  }
+
+  type ConversationMessage {
+    messageId: String!
+    direction: ConversationDirection!
+    content: String!
+    timestamp: String!
+    attachments: [AttachmentRef!]!
+  }
+
+  enum InvoiceStatus {
+    UNPAID
+    PARTIALLY_PAID
+    PAID
+    OVERDUE
+  }
+
+  type Invoice {
+    id: ID!
+    userId: ID!
+    invoiceNumber: String
+    amount: Money!
+    dueDate: String
+    issuer: Person
+    status: InvoiceStatus!
+    conversation: [ConversationMessage!]!
+    sourceUrl: String!
+    sourceType: String!
+    threadId: String
+    messageId: String
+    metadata: JSON
+    createdAt: String
+    updatedAt: String
+    linkedPayments: [Payment!]!
+  }
+
+  enum PaymentLinkMethod {
+    THREAD_CONTEXT
+    RECONCILED
+    MANUAL
+  }
+
+  type Payment {
+    id: ID!
+    userId: ID!
+    amount: Money!
+    paidAt: String!
+    payer: Person
+    payee: Person
+    invoiceId: ID
+    linkMethod: PaymentLinkMethod
+    sourceUrl: String!
+    sourceType: String!
+    threadId: String
+    messageId: String
+    metadata: JSON
+    createdAt: String
+    updatedAt: String
+    invoice: Invoice
+  }
+
+  enum TicketStatus {
+    OPEN
+    IN_PROGRESS
+    ON_HOLD
+    RESOLVED
+    CLOSED
+  }
+
+  enum TicketLevel {
+    LOW
+    MEDIUM
+    HIGH
+    CRITICAL
+  }
+
+  type Ticket {
+    id: ID!
+    userId: ID!
+    ticketNumber: String
+    title: String!
+    summary: String
+    status: TicketStatus!
+    urgency: TicketLevel
+    priority: TicketLevel
+    dueDate: String
+    assignee: Person
+    requester: Person
+    conversation: [ConversationMessage!]!
+    parentTicketId: ID
+    duplicateOfTicketId: ID
+    sourceUrl: String!
+    sourceType: String!
+    threadId: String
+    messageId: String
+    metadata: JSON
+    createdAt: String
+    updatedAt: String
+    parentTicket: Ticket
+    duplicateOfTicket: Ticket
+  }
+
+  type EventAttachmentRef {
+    documentId: String!
+    filename: String!
+    document: Document
+  }
+
+  type Event {
+    id: ID!
+    userId: ID!
+    title: String!
+    description: String
+    startTime: String!
+    endTime: String
+    timezone: String
+    location: String
+    url: String
+    attendees: [Person!]!
+    organizer: Person
+    attachments: [EventAttachmentRef!]!
+    sourceUrl: String!
+    sourceType: String!
+    threadId: String
+    messageId: String
+    metadata: JSON
+    createdAt: String
+    updatedAt: String
+  }
+
+  enum KnowledgeDocumentType {
+    CONTRACT
+    NDA
+    TERMS_AND_CONDITIONS
+    PRIVACY_POLICY
+    COMPLIANCE
+    CERTIFICATE
+    LICENSE
+    AGREEMENT
+    POLICY
+    OTHER
+  }
+
+  type Party {
+    name: String!
+    role: String
+  }
+
+  type Document {
+    id: ID!
+    userId: ID!
+    type: KnowledgeDocumentType!
+    title: String!
+    description: String
+    summary: String!
+    documentNumber: String
+    issuer: Person
+    parties: [Party!]!
+    effectiveDate: String
+    expiryDate: String
+    attachments: [AttachmentRef!]!
+    sourceUrl: String!
+    sourceType: String!
+    threadId: String
+    messageId: String
+    metadata: JSON
+    createdAt: String
+    updatedAt: String
+  }
+
+  union EntityDetail = Invoice | Payment | Ticket | Event | Document
 
   input EntityListSortInput {
     attribute: EntityListField!
@@ -310,6 +529,7 @@ const typeDefs = gql`
     getAttachmentDownloadUrl(input: AttachmentDownloadUrlInput!): String!
     entities(input: EntityListRequestInput): EntityListResponse!
     entity(id: ID!): Entity
+    entityDetail(id: ID!): EntityDetail
   }
 
   type Mutation {

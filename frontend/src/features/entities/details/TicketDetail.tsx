@@ -1,6 +1,5 @@
 import { Badge } from "@/lib/ui/badge";
 import type { Ticket, TicketLevel, TicketStatus } from "@/mocks/entities.types";
-import { ticketsMock } from "@/mocks";
 import { formatDate } from "./format";
 import { ConversationThread, DetailField, DetailGrid, PersonLine, SectionHeading, SourceFooter } from "./shared";
 
@@ -20,8 +19,8 @@ const LEVEL_BADGE: Record<TicketLevel, string> = {
 };
 
 export function TicketDetail({ ticket }: { ticket: Ticket }) {
-  const parent = ticket.parentTicketId ? ticketsMock.find((t) => t.id === ticket.parentTicketId) : null;
-  const duplicateOf = ticket.duplicateOfTicketId ? ticketsMock.find((t) => t.id === ticket.duplicateOfTicketId) : null;
+  const parent = ticket.parentTicket ?? null;
+  const duplicateOf = ticket.duplicateOfTicket ?? null;
 
   return (
     <div className="space-y-6">

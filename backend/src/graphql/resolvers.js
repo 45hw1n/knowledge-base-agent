@@ -12,6 +12,21 @@ const { reconcileSyncFailures } = require('../services/syncFailureTracker');
 const attachmentService = require('../services/attachments/attachmentService');
 const listingService = require('../services/listingService');
 const Entity = require('../models/Entity');
+const Invoice = require('../models/Invoice');
+const Payment = require('../models/Payment');
+const Ticket = require('../models/Ticket');
+// Aliased to avoid shadowing Node's global Event class (EventTarget API).
+const EventModel = require('../models/Event');
+const DocumentModel = require('../models/Document');
+const { serializeForGraphQL } = require('../utils/graphqlSerialize');
+
+const ENTITY_DETAIL_MODELS = {
+    TICKET: { Model: Ticket, typename: 'Ticket' },
+    INVOICE: { Model: Invoice, typename: 'Invoice' },
+    PAYMENT: { Model: Payment, typename: 'Payment' },
+    EVENT: { Model: EventModel, typename: 'Event' },
+    DOCUMENT: { Model: DocumentModel, typename: 'Document' },
+};
 
 function parseJsonLiteral(ast) {
     switch (ast.kind) {
@@ -224,20 +239,67 @@ const resolvers = {
             const entity = await Entity.findOne({ _id: id, userId: user._id }).lean();
             if (!entity) return null;
 
+            return listingService.normalizeEntityDocument(entity);
+        },
+        entityDetail: async (_, { id }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const entity = await Entity.findOne({ _id: id, userId: user._id }).lean();
+            if (!entity) return null;
+
+            const target = ENTITY_DETAIL_MODELS[entity.type];
+            if (!target) return null;
+
+            const doc = await target.Model.findOne({ _id: entity.entityId, userId: user._id }).lean();
+            if (!doc) return null;
+
             return {
-                id: entity._id.toString(),
-                entityType: entity.entityType,
-                data: entity.data,
-                sourceType: entity.sourceType,
-                sourceEmailId: entity.sourceEmailId ? entity.sourceEmailId.toString() : null,
-                sourceAttachmentId: entity.sourceAttachmentId || null,
-                rawTextSnippet: entity.rawTextSnippet || null,
-                confidence: entity.confidence ?? null,
-                status: entity.status,
-                extractedAt: entity.extractedAt?.toISOString?.() || null,
-                createdAt: entity.createdAt?.toISOString?.() || null,
-                updatedAt: entity.updatedAt?.toISOString?.() || null
+                ...serializeForGraphQL(doc),
+                id: doc._id.toString(),
+                __typename: target.typename,
             };
+        },
+    },
+    EntityDetail: {
+        __resolveType: (obj) => obj.__typename,
+    },
+    Invoice: {
+        linkedPayments: async (parent, _, { user }) => {
+            if (!user) return [];
+            const payments = await Payment.find({ invoiceId: parent.id, userId: user._id }).lean();
+            return payments.map((doc) => ({ ...serializeForGraphQL(doc), id: doc._id.toString() }));
+        },
+    },
+    Payment: {
+        invoice: async (parent, _, { user }) => {
+            if (!user || !parent.invoiceId) return null;
+            const doc = await Invoice.findOne({ _id: parent.invoiceId, userId: user._id }).lean();
+            if (!doc) return null;
+            return { ...serializeForGraphQL(doc), id: doc._id.toString() };
+        },
+    },
+    Ticket: {
+        parentTicket: async (parent, _, { user }) => {
+            if (!user || !parent.parentTicketId) return null;
+            const doc = await Ticket.findOne({ _id: parent.parentTicketId, userId: user._id }).lean();
+            if (!doc) return null;
+            return { ...serializeForGraphQL(doc), id: doc._id.toString() };
+        },
+        duplicateOfTicket: async (parent, _, { user }) => {
+            if (!user || !parent.duplicateOfTicketId) return null;
+            const doc = await Ticket.findOne({ _id: parent.duplicateOfTicketId, userId: user._id }).lean();
+            if (!doc) return null;
+            return { ...serializeForGraphQL(doc), id: doc._id.toString() };
+        },
+    },
+    EventAttachmentRef: {
+        document: async (parent, _, { user }) => {
+            if (!user || !parent.documentId) return null;
+            const doc = await DocumentModel.findOne({ _id: parent.documentId, userId: user._id }).lean();
+            if (!doc) return null;
+            return { ...serializeForGraphQL(doc), id: doc._id.toString() };
         },
     },
     Mutation: {

@@ -10,7 +10,7 @@ function parseObjectId(value) {
 const entitiesListConfig = {
     entityName: 'entities',
     model: Entity,
-    defaultSort: [{ attribute: 'extractedAt', order: 'DESC' }],
+    defaultSort: [{ attribute: 'createdAt', order: 'DESC' }],
     maxPageSize: 100,
     defaultPageSize: 25,
     maxConditionDepth: 8,
@@ -31,42 +31,49 @@ const entitiesListConfig = {
             operators: ['is', 'in'],
             normalizeValue: parseObjectId
         },
-        entityType: {
-            field: 'entityType',
-            dbPath: 'entityType',
+        type: {
+            field: 'type',
+            dbPath: 'type',
+            dataType: 'string',
+            sortable: true,
+            filterable: true,
+            operators: ['is', 'isNot', 'in', 'notIn']
+        },
+        displayId: {
+            field: 'displayId',
+            dbPath: 'displayId',
             dataType: 'string',
             sortable: true,
             filterable: true,
             operators: ['is', 'isNot', 'in', 'notIn', 'contains', 'startsWith']
         },
-        status: {
-            field: 'status',
-            dbPath: 'status',
+        title: {
+            field: 'title',
+            dbPath: 'title',
             dataType: 'string',
             sortable: true,
             filterable: true,
-            operators: ['is', 'isNot', 'in', 'notIn']
+            operators: ['is', 'isNot', 'contains', 'startsWith']
         },
         sourceType: {
             field: 'sourceType',
-            dbPath: 'sourceType',
+            dbPath: 'source.type',
             dataType: 'string',
             sortable: true,
             filterable: true,
             operators: ['is', 'isNot', 'in', 'notIn']
         },
-        sourceEmailId: {
-            field: 'sourceEmailId',
-            dbPath: 'sourceEmailId',
-            dataType: 'objectId',
-            sortable: false,
+        extractionStatus: {
+            field: 'extractionStatus',
+            dbPath: 'extraction.status',
+            dataType: 'string',
+            sortable: true,
             filterable: true,
-            operators: ['is', 'in'],
-            normalizeValue: parseObjectId
+            operators: ['is', 'isNot', 'in', 'notIn']
         },
-        confidence: {
-            field: 'confidence',
-            dbPath: 'confidence',
+        extractionConfidence: {
+            field: 'extractionConfidence',
+            dbPath: 'extraction.confidence',
             dataType: 'number',
             sortable: true,
             filterable: true,
@@ -74,7 +81,7 @@ const entitiesListConfig = {
         },
         extractedAt: {
             field: 'extractedAt',
-            dbPath: 'extractedAt',
+            dbPath: 'extraction.extractedAt',
             dataType: 'date',
             sortable: true,
             filterable: true,
@@ -90,8 +97,6 @@ const entitiesListConfig = {
             operators: ['is', 'gt', 'gte', 'lt', 'lte', 'between'],
             normalizeValue: (value) => new Date(value)
         }
-        // `data` (the extracted fields) is intentionally not filterable/sortable
-        // here — it's schemaless per entityType. Returned as opaque JSON.
     }
 };
 

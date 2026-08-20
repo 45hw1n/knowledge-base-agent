@@ -15,6 +15,22 @@ export function buildVariables(listInfo: ListInfo): Record<string, unknown> {
   };
 }
 
+// EntityListRequestInput is flat ({page, pageSize, sort, conditions}), not
+// nested under an inner `listInfo` key like buildTransactionListVariables's
+// target input — hence a separate builder rather than reusing that one.
+export function buildEntityListVariables(listInfo: ListInfo): Record<string, unknown> {
+  return {
+    input: {
+      page: listInfo.page,
+      pageSize: listInfo.pageSize,
+      sort: listInfo.sort
+        ? [{ attribute: listInfo.sort.key, order: listInfo.sort.order.toUpperCase() }]
+        : [],
+      conditions: null, // no filter UI exists on the Knowledge table yet
+    },
+  };
+}
+
 export function buildTransactionListVariables(listInfo: ListInfo): Record<string, unknown> {
   return {
     input: {

@@ -1,6 +1,5 @@
 import { ExternalLink } from "lucide-react";
 import type { CalendarEvent } from "@/mocks/entities.types";
-import { documentsMock } from "@/mocks";
 import { formatDateTime } from "./format";
 import { DetailField, DetailGrid, PersonLine, SectionHeading, SourceFooter } from "./shared";
 
@@ -50,15 +49,12 @@ export function EventDetail({ event }: { event: CalendarEvent }) {
         <div className="space-y-3">
           <SectionHeading>Attachments</SectionHeading>
           <div className="space-y-2">
-            {event.attachments.map((attachment) => {
-              const document = documentsMock.find((d) => d.id === attachment.documentId);
-              return (
-                <div key={attachment.documentId} className="rounded-lg border p-3 text-sm">
-                  <div className="font-medium">{document?.title ?? attachment.filename}</div>
-                  <div className="text-xs text-muted-foreground">{attachment.filename}</div>
-                </div>
-              );
-            })}
+            {event.attachments.map((attachment) => (
+              <div key={attachment.documentId} className="rounded-lg border p-3 text-sm">
+                <div className="font-medium">{attachment.document?.title ?? attachment.filename}</div>
+                <div className="text-xs text-muted-foreground">{attachment.filename}</div>
+              </div>
+            ))}
           </div>
         </div>
       )}

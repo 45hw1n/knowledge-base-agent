@@ -1,13 +1,17 @@
-// Mirrors the backend Mongoose schemas (backend/src/models/*.js) field for
-// field. No GraphQL types exist for these yet (deliberately deferred —
-// see decisions.md), so this is the mock-only source of truth for shape
-// until the real API is wired up.
+// Mirrors the backend Mongoose schemas (backend/src/models/*.js) AND the
+// GraphQL schema (backend/src/graphql/schema.js) field for field — this is
+// now the real API contract's frontend type definitions, not mock-only
+// (the mock *data* files this used to back have been removed; the real
+// entities/entityDetail queries are wired in EntityList.tsx/
+// EntityDetailSheet.tsx). Kept in `mocks/` to avoid a churny cross-file
+// rename; only the data files moved on, not this one.
 //
 // Naming note: the typed entities are called `CalendarEvent` and
 // `KnowledgeDocument` here rather than `Event`/`Document` — those names
 // would shadow the global DOM `Event`/`Document` types in any file that
 // also touches the browser API, which is exactly the kind of subtle bug
-// worth avoiding up front.
+// worth avoiding up front. (The backend GraphQL types ARE named `Event`/
+// `Document` — no such collision risk server-side.)
 
 export interface Person {
   name: string | null;
@@ -110,6 +114,10 @@ export interface Ticket {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  // Resolved server-side (Ticket.parentTicket/duplicateOfTicket) — only
+  // present when fetched via GET_ENTITY_DETAIL, not the list query.
+  parentTicket?: Pick<Ticket, 'id' | 'title'> | null;
+  duplicateOfTicket?: Pick<Ticket, 'id' | 'title'> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +142,9 @@ export interface Invoice {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  // Resolved server-side (Invoice.linkedPayments) — only present when
+  // fetched via GET_ENTITY_DETAIL, not the list query.
+  linkedPayments?: Pick<Payment, 'id' | 'amount' | 'paidAt' | 'linkMethod'>[];
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +169,9 @@ export interface Payment {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+  // Resolved server-side (Payment.invoice) — only present when fetched via
+  // GET_ENTITY_DETAIL, not the list query.
+  invoice?: Pick<Invoice, 'id' | 'invoiceNumber' | 'amount' | 'status' | 'issuer'> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +181,9 @@ export interface Payment {
 export interface EventAttachmentRef {
   documentId: string;
   filename: string;
+  // Resolved server-side (EventAttachmentRef.document) — only present when
+  // fetched via GET_ENTITY_DETAIL.
+  document?: Pick<KnowledgeDocument, 'id' | 'title'> | null;
 }
 
 export interface CalendarEvent {
