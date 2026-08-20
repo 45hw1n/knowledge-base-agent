@@ -5,7 +5,7 @@ async function updateAppStatus(userId, updates) {
       userId,
       updates
     });
-    const allowedProperties = ['emailLastSyncedAt', 'onboarded', 'emailSyncStatus', 'lastLoggedInAt', 'showPrivateEntity'];
+    const allowedProperties = ['emailLastSyncedAt', 'emailSyncStatus', 'lastLoggedInAt', 'showPrivateEntity'];
 
     try {
         if (!userId) {

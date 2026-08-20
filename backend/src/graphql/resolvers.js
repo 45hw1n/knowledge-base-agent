@@ -5,7 +5,6 @@ const syncEmailsService = require('../services/syncEmailsService');
 const gmailService = require('../services/gmailService');
 const emailProcessorService = require('../services/emailProcessorService');
 const authService = require('../services/authService');
-const { onboardUserService } = require('../services/onboardingService');
 const userPreferencesService = require('../services/userPreferencesService');
 const { updateAppStatus, updateAppStatusInternal } = require('../controllers/updateAppStatusController');
 const AppStatus = require('../models/AppStatus');
@@ -93,7 +92,6 @@ const resolvers = {
             if (!appStatus) {
                 const result = {
                     userId: user._id,
-                    onboarded: false,
                     emailLastSyncedAt: null,
                     emailSyncStatus: "IDLE",
                     emailProcessingInProgress: false,
@@ -107,7 +105,6 @@ const resolvers = {
 
             const result = {
                 userId: appStatus.userId,
-                onboarded: appStatus.onboarded,
                 emailLastSyncedAt: appStatus.emailLastSyncedAt,
                 emailSyncStatus: appStatus.emailSyncStatus || "IDLE",
                 emailProcessingInProgress: appStatus.emailProcessingInProgress || false,
@@ -245,10 +242,6 @@ const resolvers = {
     },
     Mutation: {
         logout: async (_, __, { req, res }) => await authService.logout(req, res),
-        onboardUser: async (_, { input }, { user }) => {
-            if (!user) throw new Error('User not authenticated');
-            return onboardUserService(user._id, input);
-        },
         updateUserPreferences: async (_, { input }, { user }) => {
             if (!user) {
                 throw new Error('User not authenticated');
@@ -272,17 +265,6 @@ const resolvers = {
 
             try {
                 console.log(`Starting syncEmails for user: ${user.displayName}`);
-
-                const appStatus = await AppStatus.findOne({ userId: user._id });
-
-                if (!appStatus?.onboarded) {
-                    console.log(`${user.displayName} :: ${user._id} :: User not onboarded`);
-                    return {
-                        success: false,
-                        message: 'User not onboarded',
-                        processedCount: 0,
-                    };
-                }
 
                 // Atomic Lock Acquisition
                 const lockTimeout = new Date(Date.now() - 5 * 60 * 1000);
@@ -410,7 +392,7 @@ const resolvers = {
                 };
             }
 
-            const { lookback, sinceDate, mode = 'STANDARD' } = input;
+            const { lookback, sinceDate } = input;
 
             if (!lookback && !sinceDate) {
                 return {
@@ -429,7 +411,7 @@ const resolvers = {
             }
 
             try {
-                console.log(`Starting backfillEmails for user: ${user.displayName} (Mode: ${mode})`);
+                console.log(`Starting backfillEmails for user: ${user.displayName}`);
 
                 const appStatus = await AppStatus.findOne({ userId: user._id });
 
@@ -437,14 +419,6 @@ const resolvers = {
                     return {
                         success: false,
                         message: 'App status not initialized',
-                        processedCount: 0,
-                    };
-                }
-
-                if (mode === 'STANDARD' && !appStatus?.onboarded) {
-                    return {
-                        success: false,
-                        message: 'User not onboarded',
                         processedCount: 0,
                     };
                 }

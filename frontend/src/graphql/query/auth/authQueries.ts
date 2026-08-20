@@ -27,7 +27,6 @@ export const GET_APP_STATUS = gql`
   query GetAppStatus {
     getAppStatus {
       userId
-      onboarded
       emailLastSyncedAt
       emailSyncStatus
     }

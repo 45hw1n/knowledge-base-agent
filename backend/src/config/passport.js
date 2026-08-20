@@ -95,7 +95,7 @@ module.exports = function (passport) {
           // We must save the old value here so we can sync the gap later.
           const preWatchHistoryId = user.historyId || null;
 
-          // ─── Renew Gmail watch (always, regardless of onboarding state) ───────
+          // ─── Renew Gmail watch (always, on every login) ───────
           try {
             const gmailService = require('../services/gmailService');
             await gmailService.setupWatch(user._id.toString());

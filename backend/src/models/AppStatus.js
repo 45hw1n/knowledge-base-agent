@@ -12,10 +12,6 @@ const AppStatusSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
-    onboarded: {
-        type: Boolean,
-        default: false
-    },
     emailSyncStatus: {
         type: String,
         enum: ['IDLE', 'SYNC_IN_PROGRESS'],

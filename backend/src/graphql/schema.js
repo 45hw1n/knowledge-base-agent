@@ -57,11 +57,6 @@ const typeDefs = gql`
     data: [EmailsByStatus!]!
   }
 
-  enum BackfillMode {
-    STANDARD
-    ONBOARDING_BACKFILL
-  }
-
   input LookbackWindowInput {
     value: Int!
     unit: String! # only "DAYS" supported for now
@@ -70,7 +65,6 @@ const typeDefs = gql`
   input BackfillEmailsInput {
     lookback: LookbackWindowInput
     sinceDate: String # ISO date (YYYY-MM-DD); Either lookback OR sinceDate must be provided (not both)
-    mode: BackfillMode = STANDARD
   }
 
   type SyncResult {
@@ -87,7 +81,6 @@ const typeDefs = gql`
   type AppStatus {
     userId: ID!
     emailLastSyncedAt: String
-    onboarded: Boolean
     emailSyncStatus: EmailSyncStatus
     emailProcessingInProgress: Boolean
     lastEmailAIProcessStartedAt: String
@@ -99,7 +92,6 @@ const typeDefs = gql`
 
   input UpdateAppStatusInput {
     emailLastSyncedAt: String
-    onboarded: Boolean
   }
 
   type UserPreferences {
@@ -116,23 +108,6 @@ const typeDefs = gql`
     emailSyncStartDate: String
     autoProcess: Boolean
     isBetaUser: Boolean
-  }
-
-  input OnboardUserInput {
-    isBetaUser: Boolean!
-    autoProcess: Boolean!
-  }
-
-  type OnboardUserData {
-    isBetaUser: Boolean!
-    autoProcess: Boolean!
-    onboarded: Boolean!
-  }
-
-  type OnboardUserResponse {
-    success: Boolean!
-    message: String!
-    data: OnboardUserData!
   }
 
   type Error {
@@ -344,7 +319,6 @@ const typeDefs = gql`
     updateAppStatus(input: UpdateAppStatusInput!): AppStatus
     testMutation(input: String!): String
     logout: Boolean!
-    onboardUser(input: OnboardUserInput!): OnboardUserResponse!
     updateUserPreferences(input: UpdateUserPreferencesInput!): UserPreferences!
     uploadAttachments(input: UploadAttachmentsInput!): UploadAttachmentsPayload!
     deleteAttachment(input: DeleteAttachmentInput!): Boolean!
