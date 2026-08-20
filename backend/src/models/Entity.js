@@ -160,6 +160,11 @@ EntitySchema.index({ 'source.threadId': 1 });
 // (see displayIdService.js) — same "scope to userId" reasoning already
 // applied to EmailThread's uniqueness boundary.
 EntitySchema.index({ userId: 1, displayId: 1 }, { unique: true });
+// At most one Entity row per typed child — makes a retried Entity-creation
+// step (e.g. the typed child already exists from a prior attempt but the
+// Entity row failed to write) safe to simply re-run: the repository treats
+// the resulting E11000 as "already created" and fetches the existing row.
+EntitySchema.index({ entityId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Entity', EntitySchema);
 module.exports.ENTITY_TYPES = ENTITY_TYPES;

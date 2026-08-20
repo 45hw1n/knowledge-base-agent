@@ -156,6 +156,8 @@ const DocumentSchema = new mongoose.Schema(
 DocumentSchema.index({ userId: 1 });
 DocumentSchema.index({ userId: 1, type: 1 });
 DocumentSchema.index({ userId: 1, createdAt: -1 });
+// Same retry-safety reasoning as Invoice's messageId index — see there.
+DocumentSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
 
 function countWords(text) {
   if (!text) return 0;

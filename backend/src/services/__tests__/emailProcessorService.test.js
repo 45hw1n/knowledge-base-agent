@@ -6,13 +6,13 @@ jest.mock('../../models/EmailToProcess', () => ({
   updateMany: jest.fn(),
 }));
 
-jest.mock('../../ai/features/extractEntities/orchestrator', () => ({
-  extractEntitiesFromEmail: jest.fn(),
+jest.mock('../../ai/orchestrator', () => ({
+  extractAndPersistEntity: jest.fn(),
 }));
 
 const mongoose = require('mongoose');
 const EmailToProcess = require('../../models/EmailToProcess');
-const { extractEntitiesFromEmail } = require('../../ai/features/extractEntities/orchestrator');
+const { extractAndPersistEntity } = require('../../ai/orchestrator');
 const { processEmails, reclaimStaleProcessing } = require('../emailProcessorService');
 
 function leanQuery(result) {
@@ -64,7 +64,7 @@ describe('emailProcessorService — idempotency & crash recovery', () => {
       EmailToProcess.find.mockReturnValue(leanQuery([{ _id: emailId, messageId: 'm1' }]));
       EmailToProcess.findOneAndUpdate.mockResolvedValue({ _id: emailId, messageId: 'm1' });
       EmailToProcess.updateOne.mockResolvedValue({});
-      extractEntitiesFromEmail.mockResolvedValue({ entitiesCreated: 1, error: null });
+      extractAndPersistEntity.mockResolvedValue({ entityCreated: true, entityId: 'entity-1', type: 'INVOICE', error: null });
 
       const result = await processEmails({ userId, status: 'DETECTED' });
 
@@ -95,7 +95,7 @@ describe('emailProcessorService — idempotency & crash recovery', () => {
       const result = await processEmails({ userId, status: 'DETECTED' });
 
       expect(result.queuedCount).toBe(0);
-      expect(extractEntitiesFromEmail).not.toHaveBeenCalled();
+      expect(extractAndPersistEntity).not.toHaveBeenCalled();
       expect(EmailToProcess.updateOne).not.toHaveBeenCalled();
     });
 
@@ -104,7 +104,7 @@ describe('emailProcessorService — idempotency & crash recovery', () => {
       EmailToProcess.find.mockReturnValue(leanQuery([{ _id: emailId, messageId: 'm1' }]));
       EmailToProcess.findOneAndUpdate.mockResolvedValue({ _id: emailId, messageId: 'm1' });
       EmailToProcess.updateOne.mockResolvedValue({});
-      extractEntitiesFromEmail.mockRejectedValue(new Error('transient AI failure'));
+      extractAndPersistEntity.mockResolvedValue({ entityCreated: false, entityId: null, type: 'INVOICE', error: 'transient AI failure' });
 
       const result = await processEmails({ userId, status: 'DETECTED' });
 

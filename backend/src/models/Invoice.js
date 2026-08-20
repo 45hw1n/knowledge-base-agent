@@ -109,6 +109,11 @@ InvoiceSchema.index({ userId: 1, createdAt: -1 });
 // Reconciliation looks up "which Invoice(s) belong to this Gmail thread".
 InvoiceSchema.index({ userId: 1, threadId: 1 });
 InvoiceSchema.index({ 'metadata.transactionRef': 1 }, { sparse: true });
+// One Invoice per source email at most — makes a retried/duplicated
+// extraction (e.g. after a stale-PROCESSING reclaim) safe: the repository
+// treats the resulting E11000 as "already created" rather than inserting a
+// second Invoice for the same message.
+InvoiceSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Invoice

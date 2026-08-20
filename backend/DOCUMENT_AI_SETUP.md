@@ -1,10 +1,11 @@
 # Document AI Setup Guide
 
-The entity-extraction pipeline (`src/ai/features/extractEntities/`) parses email
-attachments through a pluggable document parser before running LLM extraction —
-see `src/documentParsing/client/`. Locally it defaults to a mock provider that
-passes text through unchanged, so the whole pipeline runs without any GCP setup.
-This guide covers switching to real Google Document AI OCR/layout parsing.
+The entity-extraction pipeline (`src/ai/orchestrator/documentProcessor.js`) parses
+email attachments through a pluggable document parser before running LLM
+extraction — see `src/documentParsing/client/`. Locally it defaults to a mock
+provider that passes text through unchanged, so the whole pipeline runs without
+any GCP setup. This guide covers switching to real Google Document AI
+OCR/layout parsing.
 
 ## What's Already Built
 
@@ -52,7 +53,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 ### 5. Verify
 
 Send yourself an email with a PDF or image attachment, then trigger processing
-(`processDebitEmails` mutation) and check:
+(`processEmails` mutation) and check:
 
 ```javascript
 db.entities.find().sort({ createdAt: -1 }).limit(5)

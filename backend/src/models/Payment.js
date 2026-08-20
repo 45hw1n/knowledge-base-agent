@@ -122,6 +122,8 @@ PaymentSchema.index({ userId: 1, invoiceId: 1 });
 PaymentSchema.index({ userId: 1, createdAt: -1 });
 PaymentSchema.index({ userId: 1, threadId: 1 });
 PaymentSchema.index({ 'metadata.transactionRef': 1 }, { sparse: true });
+// Same retry-safety reasoning as Invoice's messageId index — see there.
+PaymentSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Payment

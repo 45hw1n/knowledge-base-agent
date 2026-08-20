@@ -154,6 +154,8 @@ TicketSchema.index({ userId: 1 });
 TicketSchema.index({ userId: 1, status: 1 });
 TicketSchema.index({ userId: 1, createdAt: -1 });
 TicketSchema.index({ userId: 1, threadId: 1 });
+// Same retry-safety reasoning as Invoice's messageId index — see there.
+TicketSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
 TicketSchema.index({ parentTicketId: 1 }, { sparse: true });
 TicketSchema.index({ duplicateOfTicketId: 1 }, { sparse: true });
 

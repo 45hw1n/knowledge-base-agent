@@ -149,6 +149,8 @@ const EventSchema = new mongoose.Schema(
 
 EventSchema.index({ userId: 1 });
 EventSchema.index({ userId: 1, startTime: 1 });
+// Same retry-safety reasoning as Invoice's messageId index — see there.
+EventSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Event

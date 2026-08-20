@@ -1420,3 +1420,141 @@ rather than let four copies of the same policy drift independently.
   `EmailToProcess`'s unique `messageId` index + `E11000` handling in
   `saveEmailToProcess()`, which this phase verified still fully covers a
   duplicate webhook delivery for the same message.
+
+---
+
+## The Real AI Orchestrator — Invoice + Payment (first two types)
+
+Replaces the generic, type-agnostic orchestrator (`ai/features/extractEntities/*`,
+flagged as broken/being-superseded in every phase above) with the real
+classifier-driven pipeline: top classifier candidate → type-specific
+extraction → type-specific validation → type-specific repository → `Entity`
+row. The legacy directory is deleted, not left alongside its replacement —
+nothing referenced it once `emailProcessorService.js`'s one call site moved
+over, and it was already permanently broken (see the Entity Model section
+above), so keeping known-dead code around served no purpose.
+
+### Decision: top classifier candidate only — the AI never re-decides type
+
+The classifier already assigns type(s); making the AI re-classify would
+duplicate the exact job a cheap, deterministic, tested rule engine exists to
+do. `extractAndPersistEntity()` always acts on
+`emailDoc.classification.candidates[0].type` only. Multi-candidate handling
+(e.g. running extraction for more than one candidate when scores are close)
+is explicitly deferred — same "don't build what's not needed yet" precedent
+as every prior phase.
+
+### Decision: two shared processors (Document, Text/Summary) + a per-type prompt/repository split, not five parallel pipelines
+
+**Per-type (genuinely different content):** `prompts/invoicePrompt.js`,
+`prompts/paymentPrompt.js`, `repositories/invoiceRepository.js`,
+`repositories/paymentRepository.js` — an Invoice's fields and a Payment's
+fields are just different, as is what persisting one actually requires
+(status re-derivation vs. same-thread auto-link).
+
+**Shared (identical mechanics regardless of type):**
+- `documentProcessor.js` — OCR each attachment, dispatch to the right
+  type's prompt builder via a lookup table (mirrors `ai/client/index.js`'s
+  own provider-dispatch pattern rather than duplicating the OCR/AI-call/
+  parse/merge logic five times), reconcile across multiple attachments.
+- `structuredExtraction.js` — the actual "build prompt → call `aiClient
+  .generate` → parse JSON" step. Pulled out of `documentProcessor.js` into
+  its own module specifically so the *fallback* path (extracting straight
+  from the email body when no attachment produced usable data) can reuse
+  it without reaching into the document-specific module — same function,
+  different input text, one shared implementation either way.
+- `textSummaryProcessor.js` — summarizing an email body needs no
+  type-specific logic at all; one shared prompt/call, feeding a
+  secondary/context field, never a source of primary structured fields.
+- `repositories/entityRepository.js` — displayId generation, source-URL
+  construction, and thread lookup are identical for every type; extracted
+  once and called by all type repositories, same precedent as
+  `PersonSchema`/`MoneySchema`/`AttachmentRefSchema`.
+
+### Decision: attachment-derived data is authoritative; the email body is a fallback, not a co-equal source
+
+Previously, attachment OCR text and email body text were concatenated into
+one blob for a single generic prompt — no priority between them. Now: if
+attachments exist, `documentProcessor.js`'s result is used outright; the
+email body is only sent through `structuredExtraction.js` as a **fallback**
+when the Document Processor found nothing (no attachments, or none
+produced usable fields). The Text/Summary Processor always runs regardless,
+but only ever populates a secondary summary/notes field — it never competes
+with attachment-derived data for the primary structured fields.
+
+**Multi-attachment conflicts** (two attachments disagree on a field, e.g.
+two different `amount.value`) resolve via first-non-null-wins, logged as a
+warning — not a rejection. Matches the existing "warn, don't reject"
+convention (`Document.js`'s summary-word-count check). Flagged as a default,
+not a settled requirement — revisit if a real conflict case turns out to
+need stricter handling.
+
+### Decision: `feature: 'summarizeEmail'` added as a second AI-client feature tag
+
+`ai/client/mock.client.js` previously only recognized `'extractEntities'`;
+anything else silently fell through to a generic "unknown feature" stub.
+The Text/Summary Processor's calls needed their own branch so local/test
+runs against the mock provider actually exercise this path instead of
+getting junk back. `MOCK_EXTRACTIONS` in the mock client is also now keyed
+by `options.type` (`INVOICE`/`PAYMENT`), matching the flat per-type response
+shape the new prompts ask for — the old mock's single hardcoded "contact"
+response is gone along with the generic orchestrator it was written for.
+
+### Decision: `Payment.paidAt`'s "always extractable" requirement is satisfied by falling back to the email's own Date header
+
+`Payment.paidAt` is schema-required, but the AI may legitimately find no
+explicit payment date in the text. Per the exact fallback this document
+already called for when `Payment.js` was built ("falling back to the source
+email's received date... is an extraction-layer concern, not a schema
+one"), `paymentRepository.js` uses `emailDoc.date` (the email's own `Date`
+header, already stored on `EmailToProcess`) whenever the extracted `paidAt`
+is null, before validating.
+
+### Decision: Payment auto-linking is scoped to same-thread only; cross-thread reconciliation stays manual
+
+`paymentReconciliationService.findMatchingInvoice()`/`determineLinkMethod()`
+existed but were never wired in. `paymentRepository.js` now calls them, but
+restricts candidates to `Invoice.find({userId, threadId: payment.threadId})`
+— same-Gmail-thread Invoices only. Two consequences, both deliberate: (1)
+`determineLinkMethod()` can only ever resolve to `'THREAD_CONTEXT'` here,
+never `'RECONCILED'`, since cross-thread candidates are never queried; (2)
+same-thread alone still isn't sufficient to auto-link — the existing
+scoring still requires a corroborating signal (typically exact-amount) to
+clear `MATCH_THRESHOLD`. A bank-alert-style payment in a different thread,
+matched only by amount/payee, is left unlinked (`invoiceId: null`) for the
+user to link manually — the manual-link mutation itself isn't built yet
+(still schema-only, `linkMethod: 'MANUAL'`), so "manual" is aspirational
+until that follow-up lands.
+
+### Decision: idempotency via `{userId, messageId}` unique+sparse indexes on all five typed collections, plus `{entityId}` unique+sparse on `Entity`
+
+Closes the "known adjacent gap" flagged in the idempotency-hardening phase
+above: with "top candidate only," each email produces at most one typed
+entity, so a unique index on `(userId, messageId)` is the correct invariant.
+Applied to all five typed collections now (not just Invoice/Payment) even
+though only two have repositories yet — cheap, and avoids the inconsistency
+of some typed collections having the guarantee and others not once Ticket/
+Event/Document are built. Every repository's `create()` call catches the
+resulting `E11000` and fetches the existing record instead of erroring
+(same idiom as `saveEmailToProcess()`); `entityRepository.js` does the same
+for the Entity row itself, independently — so a retry that reaches "typed
+child already exists, Entity row doesn't yet" self-heals in one call rather
+than needing special-case recovery logic.
+
+### Deliberately not built in this phase
+
+- Ticket/Event/Document prompts and repositories — next, per the agreed
+  build order (Invoice+Payment exercised both the attachment-heavy and
+  no-attachment/fallback paths; Ticket is next, mostly body-driven).
+- To/Cc/Bcc and raw HTML in the extraction context — still only
+  subject/from/body, unchanged from before this phase. Not yet needed by
+  the Invoice/Payment prompts; revisit per-type if a specific prompt
+  actually needs them, and fetch live via Gmail at extraction time (same
+  pattern as attachments) rather than persisting them on `EmailToProcess`.
+- The manual Payment-linking mutation/resolver (`linkMethod: 'MANUAL'`
+  stays schema-only, unreachable from any code path yet).
+- Cross-thread reconciliation (`'RECONCILED'` link method) — structurally
+  impossible to reach in the current wiring, not merely untested.
+- Native structured-output modes (e.g. Gemini's `responseSchema`) — prompts
+  still ask for free-text JSON, parsed via fence-stripping + `JSON.parse`,
+  consistent with the rest of this codebase's AI-response handling so far.

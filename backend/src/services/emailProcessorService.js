@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const EmailToProcess = require("../models/EmailToProcess");
-const { extractEntitiesFromEmail } = require("../ai/features/extractEntities/orchestrator");
+const { extractAndPersistEntity } = require("../ai/orchestrator");
 
 const BATCH_SIZE = 5;
 const INTER_BATCH_DELAY_MS = 500;
@@ -163,7 +163,7 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
           let extractionResult;
           await aiConcurrencyLimit.acquire();
           try {
-            extractionResult = await extractEntitiesFromEmail(locked);
+            extractionResult = await extractAndPersistEntity(locked);
           } finally {
             aiConcurrencyLimit.release();
           }
@@ -186,7 +186,7 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
           );
 
           console.log(
-            `[EmailProcessor] emailId=${lockedId} processed successfully, entitiesCreated=${extractionResult.entitiesCreated}`,
+            `[EmailProcessor] emailId=${lockedId} processed successfully, type=${extractionResult.type}, entityId=${extractionResult.entityId}`,
           );
           return 1;
         } catch (error) {
