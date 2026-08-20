@@ -8,6 +8,8 @@
  * documentParsing/client/index.js alongside the mock provider, so it must
  * not throw at require-time — only when actually used without credentials.
  */
+const fs = require('fs');
+
 let client;
 function getClient() {
     if (!client) {
@@ -34,7 +36,48 @@ function getProcessorName() {
     return `projects/${projectId}/locations/${location}/processors/${processorId}`;
 }
 
+/**
+ * Startup check — confirms the credentials file is present and that it can
+ * actually authenticate to Google's APIs. Deliberately does NOT call a
+ * Document AI resource method (e.g. getProcessor): the service account is
+ * scoped to the minimal "Document AI API User" role for processDocument
+ * only, which excludes resource-read permissions like processors.get.
+ * Called once from server.js when DOCUMENT_PARSER_PROVIDER=google-document-ai;
+ * failures are logged but non-fatal so the mock provider path stays usable.
+ */
+async function verifyConnection() {
+    const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+    if (!keyPath || !fs.existsSync(keyPath)) {
+        console.error(`[Document AI] Credentials file not found at "${keyPath}"`);
+        return false;
+    }
+    console.log(`[Document AI] Credentials file detected at "${keyPath}"`);
+
+    try {
+        getProcessorName(); // validates DOCUMENT_AI_* env vars are set
+
+        // Uses google-auth-library directly (not the Document AI client's
+        // internal auth) because it needs an explicit scope to mint a token —
+        // the Document AI client only attaches scopes when calling an actual
+        // RPC method, which we're avoiding here (see comment above).
+        const { GoogleAuth } = require('google-auth-library');
+        const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        const authClient = await auth.getClient();
+        const { token } = await authClient.getAccessToken();
+        if (!token) throw new Error('No access token returned');
+
+        console.log('[Document AI] Credentials authenticated successfully with Google Cloud.');
+        return true;
+    } catch (error) {
+        console.error('[Document AI] Connection check failed:', error.message);
+        return false;
+    }
+}
+
 const googleDocumentAIClient = {
+    verifyConnection,
+
     async parse({ buffer, mimeType } = {}) {
         if (!buffer || buffer.length === 0) {
             return { text: '', provider: 'google-document-ai' };

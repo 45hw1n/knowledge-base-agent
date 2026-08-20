@@ -48,6 +48,14 @@ const startServer = async () => {
     // 2. Schedule background jobs (requires DB to be ready)
     registerGmailWatchRenewalJob();
 
+    // 2b. Verify Document AI credentials/connectivity when that provider is enabled.
+    // Non-fatal: logs success/failure so it's visible in the deploy logs without
+    // blocking startup (the mock provider path keeps working either way).
+    if (process.env.DOCUMENT_PARSER_PROVIDER === 'google-document-ai') {
+      const googleDocumentAIClient = require('./src/documentParsing/client/googleDocumentAI.client');
+      await googleDocumentAIClient.verifyConnection();
+    }
+
     // 3. Initialize Apollo Server
     const apolloServer = await createApolloServer();
 

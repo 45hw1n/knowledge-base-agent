@@ -31,7 +31,7 @@ const envPath = path.resolve(process.cwd(), envFile);
 
 // Load only if file exists
 if (fs.existsSync(envPath)) {
-  dotenv.config({ path: envPath });
+  dotenv.config({ path: envPath, quiet: true });
   console.log(`✅ Loaded environment variables from ${envFile}`);
 } else {
   console.warn(`⚠️ ${envFile} not found. Falling back to process.env only.`);

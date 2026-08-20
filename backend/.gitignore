@@ -6,6 +6,9 @@ node_modules/
 .env.local
 .env.production
 
+# GCP service account keys — never commit
+.gcp/
+
 # Large binaries or installers
 mongodb-macos-arm64-7.0.4.tgz
 
