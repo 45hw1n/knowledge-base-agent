@@ -9,7 +9,7 @@ const { onboardUserService } = require('../services/onboardingService');
 const userPreferencesService = require('../services/userPreferencesService');
 const { updateAppStatus, updateAppStatusInternal } = require('../controllers/updateAppStatusController');
 const AppStatus = require('../models/AppStatus');
-const { MAX_SYNC_FAILURES } = require('../utils/Constants');
+const { reconcileSyncFailures } = require('../services/syncFailureTracker');
 const attachmentService = require('../services/attachments/attachmentService');
 const listingService = require('../services/listingService');
 const Entity = require('../models/Entity');
@@ -341,56 +341,24 @@ const resolvers = {
 
                         totalProcessedCount += historyResult.processedCount;
 
-                        // ── Safe historyId advancement (mirrors webhook logic) ──────────────
-                        if (historyResult.failedMessageIds && historyResult.failedMessageIds.length > 0) {
-                            // Atomically increment failure counters
-                            const incOps = {};
-                            for (const msgId of historyResult.failedMessageIds) {
-                                incOps[`syncFailures.${msgId}`] = 1;
-                            }
-                            await updateAppStatusInternal(user._id, { $inc: incOps });
-
-                            // Determine retryable failures (check count BEFORE increment)
-                            const retryableFailures = historyResult.failedMessageIds.filter(id => {
-                                const count = syncFailures instanceof Map
-                                    ? (syncFailures.get(id) || 0)
-                                    : (syncFailures?.[id] || 0);
-                                return (count + 1) < MAX_SYNC_FAILURES;
-                            });
-
-                            if (retryableFailures.length > 0) {
-                                console.warn(
-                                    `[syncEmails] Retaining historyId=${startHistoryId} — ` +
-                                    `${retryableFailures.length} retryable failure(s): [${retryableFailures.join(', ')}]`
-                                );
-                            } else {
-                                // All failures are now poison — advance so we don't block forever
-                                console.error(
-                                    `[syncEmails] All failures exhausted (>= ${MAX_SYNC_FAILURES} retries). ` +
-                                    `Advancing historyId to unblock pipeline.`
-                                );
-                                if (historyResult.newestHistoryId) {
-                                    const currentHId = BigInt(startHistoryId);
-                                    const newHId = BigInt(historyResult.newestHistoryId);
-                                    if (newHId > currentHId) {
-                                        await User.updateOne(
-                                            { _id: user._id },
-                                            { $set: { historyId: historyResult.newestHistoryId } }
-                                        );
-                                    }
+                        // ── Safe historyId advancement (shared policy — see syncFailureTracker) ──
+                        await reconcileSyncFailures({
+                            userId: user._id,
+                            failedMessageIds: historyResult.failedMessageIds,
+                            priorSyncFailures: syncFailures,
+                            context: '[syncEmails]',
+                            onAdvance: async () => {
+                                if (!historyResult.newestHistoryId) return;
+                                const currentHId = startHistoryId ? BigInt(startHistoryId) : BigInt(0);
+                                const newHId = BigInt(historyResult.newestHistoryId);
+                                if (newHId > currentHId) {
+                                    await User.updateOne(
+                                        { _id: user._id },
+                                        { $set: { historyId: historyResult.newestHistoryId } }
+                                    );
                                 }
-                            }
-                        } else if (historyResult.newestHistoryId) {
-                            // ✅ No failures — advance cursor normally
-                            const currentHId = startHistoryId ? BigInt(startHistoryId) : BigInt(0);
-                            const newHId = BigInt(historyResult.newestHistoryId);
-                            if (newHId > currentHId) {
-                                await User.updateOne(
-                                    { _id: user._id },
-                                    { $set: { historyId: historyResult.newestHistoryId } }
-                                );
-                            }
-                        }
+                            },
+                        });
 
                     } // end if (startHistoryId)
 

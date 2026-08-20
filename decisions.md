@@ -1296,3 +1296,127 @@ direct unit test as a result.
 - Any actual Invoice/Ticket conversation-linking logic — orchestrator
   work, per above.
 - Fixing the Jest/dynamic-import gap described above.
+
+---
+
+## Email Processor — Idempotency Hardening & Missed-Email Recovery
+
+Audited the full ingestion/processing pipeline end to end
+(`syncEmailsService.js`, `emailProcessorService.js`, `webhookController.js`,
+`resolvers.js`'s manual sync mutation, `passport.js`'s login-time recovery)
+for two specific failure classes: a message processed more than once
+producing duplicate side effects, and a message silently never processed at
+all. Four concrete gaps were found and fixed; one adjacent gap was found and
+deliberately left alone (see below).
+
+### Gap 1 (critical): a crash mid-AI-batch stranded emails in `PROCESSING` forever
+
+**Investigation:** `processEmails()`'s atomic lock (`findOneAndUpdate` to
+`PROCESSING`) is correct for preventing two workers from processing the same
+email concurrently, but `PROCESSING` was never included in `allowedStatuses`
+for re-locking, and no code anywhere reset it. If the process died (crash,
+OOM-kill, deploy) between acquiring the lock and writing a terminal status,
+that email became permanently invisible: the default query only looks at
+`DETECTED`, and even an explicit `status: "PROCESSING"` query couldn't
+re-lock it. This is exactly a "missed email," just at the AI-processing
+stage instead of the ingestion stage — no error surfaced anywhere, since
+nothing ever looked at it again.
+
+**Fix:** added `EmailToProcess.processingStartedAt` (set when a lock is
+acquired, cleared on every terminal transition) and
+`reclaimStaleProcessing(userId)`, called at the top of every `processEmails()`
+run, which atomically resets any `PROCESSING` record older than
+`PROCESSING_STALE_TIMEOUT_MS` (10 min) back to `RETRY_PENDING`. This is the
+same crash-recovery shape already used twice elsewhere in this codebase —
+`AppStatus.emailSyncStatus`/`syncStartedAt` (webhook lock) and
+`AppStatus.emailProcessingInProgress`/`lastEmailAIProcessStartedAt`
+(resolver-level lock) — applied here at the level of an individual queued
+email rather than the whole batch run.
+
+**Known adjacent gap, not fixed:** if a worker crashes *after*
+`extractEntitiesFromEmail()` successfully persists entities but *before* the
+status update to `LLM_PROCESSED` commits, a reclaim-and-retry will re-run
+extraction and (once `repository.js`'s known schema mismatch — see the
+Entity Model section above — is eventually fixed so this path can succeed at
+all) could persist duplicate entities. `repository.js`/the generic
+orchestrator is already flagged throughout this document as a legacy path
+being superseded by the classifier → thread → Entity pipeline, so hardening
+it against this specific race wasn't done here — real idempotency for entity
+creation (e.g. an `(sourceEmailId)`-scoped upsert or a dedupe check in
+`persistEntities`) belongs in whichever orchestrator actually ships, not in
+this reliability pass. Flagging explicitly per this document's established
+practice, rather than leaving it a silent gap.
+
+### Gap 2 (high): a webhook whose `historyId` expired had no recovery path
+
+**Investigation:** Gmail's History API rejects a `startHistoryId` that's too
+old (returns 404/410 once the mailbox's history window has rolled past it).
+`config/passport.js#triggerLoginSync` already handles this correctly — on a
+`syncHistorySince` failure it falls back to `syncEmailsByLookback()` using
+`UserPreferences.emailSyncStartDate`. The live webhook handler
+(`webhookController.js#processNotificationAsync`) had no equivalent: a
+`syncHistorySince` throw was caught by the outer catch-all, logged, and
+nothing else happened — `User.historyId` never advanced, so the *next*
+webhook delivery would hit the exact same expired `historyId` and fail
+identically, forever. For an account with a long-lived session (no reason to
+log in again soon), this meant real-time email ingestion could silently stop
+for an indefinite period, discovered only if/when the user next logged in.
+
+**Fix:** `webhookController.js#recoverFromExpiredHistoryId()` — on a
+`syncHistorySince` throw, re-establish a fresh anchor via
+`gmailService.setupWatch()` (safe to call anytime; also renews the watch)
+and backfill the gap via `syncEmailsByLookback()`, preferring
+`AppStatus.emailLastSyncedAt` (more precise for an active mailbox) and
+falling back to `UserPreferences.emailSyncStartDate`, then a bare 24h window
+if neither exists. `User.historyId` is then set to the fresh value so the
+next webhook resumes from a valid cursor instead of repeating the same
+failure.
+
+### Gap 3 & 4 (moderate): `syncRecentEmails`/`syncEmailsByLookback` could silently drop emails or wedge on one bad message
+
+**Investigation:** `syncHistorySince()` already had the right policy —
+track per-message failures, skip messages that have become "poison"
+(`AppStatus.syncFailures` + `MAX_SYNC_FAILURES`, an existing mechanism), and
+only advance the cursor once nothing is left un-retried. Neither
+`syncRecentEmails()` nor `syncEmailsByLookback()` followed it:
+`syncRecentEmails()` had no per-message `try/catch` at all, so one message
+that always throws (a decode bug, an oversized attachment, whatever)
+permanently blocked discovery of every Gmail message *after* it in the
+inbox, on every future run, with no poison-pill escape. `syncEmailsByLookback()`
+caught per-message errors but then unconditionally advanced
+`emailLastSyncedAt` regardless — a transient failure (a momentary Gmail API
+or DB blip) was silently and permanently excluded the moment the date
+window moved past it, with no retry.
+
+**Fix:** both functions now track `failedMessageIds`, skip messages already
+confirmed poison (reusing the same `AppStatus.syncFailures`/
+`MAX_SYNC_FAILURES` state `syncHistorySince` already maintains — one shared
+poison-pill ledger across all three sync paths, not three independent ones),
+and only advance `emailLastSyncedAt` once every message in the batch has
+either succeeded or become poison.
+
+### Refactor: extracted `services/syncFailureTracker.js`
+
+The "increment failure counters, decide retryable-vs-poison, advance the
+cursor if and only if nothing is retryable" logic existed as two
+near-identical, independently-maintained copies (`webhookController.js`'s
+historyId handling and `resolvers.js`'s `syncEmails` mutation) even before
+this phase added two more call sites for the same policy. Extracted into
+`reconcileSyncFailures()` (plus the underlying `incrementSyncFailures()`/
+`getRetryableFailures()`), parameterized by an `onAdvance` callback since
+what "advancing the cursor" means differs (`User.historyId` vs.
+`AppStatus.emailLastSyncedAt`). Same precedent as this document's
+`PersonSchema`/`MoneySchema`/`AttachmentRefSchema` extractions: reuse the
+established pattern once a third/fourth copy would otherwise be needed,
+rather than let four copies of the same policy drift independently.
+
+### Deliberately not touched in this phase
+
+- `repository.js`'s known Entity-schema mismatch and the duplicate-entity-
+  on-retry risk it implies (see Gap 1's "known adjacent gap" above) — both
+  already flagged, both squarely orchestrator-rewrite work.
+- Gmail push notification de-duplication at the Pub/Sub layer itself (Google
+  Cloud Pub/Sub is at-least-once delivery) — already handled downstream by
+  `EmailToProcess`'s unique `messageId` index + `E11000` handling in
+  `saveEmailToProcess()`, which this phase verified still fully covers a
+  duplicate webhook delivery for the same message.

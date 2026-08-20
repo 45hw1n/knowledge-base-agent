@@ -82,6 +82,16 @@ const EmailToProcessSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Set when a worker locks this record into PROCESSING; cleared on any
+    // terminal transition. Lets processEmails() detect and reclaim records
+    // left stuck in PROCESSING by a crashed/killed worker (see
+    // emailProcessorService.js#reclaimStaleProcessing) — without this, such
+    // a record is invisible to every future processEmails() query forever,
+    // since PROCESSING isn't one of the statuses eligible to be re-locked.
+    processingStartedAt: {
+        type: Date,
+        default: null
+    },
     _processed_result: {
         type: mongoose.Schema.Types.Mixed
     },

@@ -6,6 +6,12 @@ const BATCH_SIZE = 5;
 const INTER_BATCH_DELAY_MS = 500;
 const AI_CONCURRENCY_LIMIT = 3;
 
+// How long a record may sit in PROCESSING before it's assumed to belong to a
+// crashed/killed worker rather than one still genuinely in flight. Mirrors
+// the same crash-recovery pattern already used for AppStatus's
+// emailSyncStatus/syncStartedAt lock (see webhookController.js).
+const PROCESSING_STALE_TIMEOUT_MS = 10 * 60 * 1000;
+
 class Semaphore {
   constructor(max) {
     this._max = max;
@@ -44,6 +50,33 @@ function chunkArray(arr, size) {
 }
 
 /**
+ * Reclaim emails stuck in PROCESSING because the worker that locked them
+ * died (crash, restart, OOM-kill) before it could write a terminal status.
+ * Without this, such a record is permanently invisible: PROCESSING is not
+ * one of the statuses processEmails() is willing to re-lock, and the
+ * default query only ever looks at DETECTED — so a mid-batch crash would
+ * otherwise strand that email forever, silently, with no error surfaced
+ * anywhere. Resetting to RETRY_PENDING makes it eligible to be picked up
+ * (and re-locked) by the very next processEmails() call.
+ *
+ * @param {string|ObjectId} userId
+ */
+async function reclaimStaleProcessing(userId) {
+    const staleBefore = new Date(Date.now() - PROCESSING_STALE_TIMEOUT_MS);
+
+    const result = await EmailToProcess.updateMany(
+        { accountUserId: userId, status: "PROCESSING", processingStartedAt: { $lt: staleBefore } },
+        { $set: { status: "RETRY_PENDING" }, $unset: { processingStartedAt: "" } },
+    );
+
+    const reclaimed = result.modifiedCount ?? result.nModified ?? 0;
+    if (reclaimed > 0) {
+        console.warn(`[EmailProcessor] Reclaimed ${reclaimed} email(s) stuck in PROCESSING (stale > ${PROCESSING_STALE_TIMEOUT_MS}ms)`);
+    }
+    return reclaimed;
+}
+
+/**
  * Process queued emails by querying Mongo and running them through the AI orchestrator.
  * Uses atomic status transitions to prevent race conditions across concurrent workers.
  * Emails are processed in parallel batches of BATCH_SIZE.
@@ -59,6 +92,8 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
   if (!userId) {
     throw new Error("userId is required for processEmails");
   }
+
+  await reclaimStaleProcessing(userId);
 
   // All branches are scoped to the calling user — prevents cross-tenant access
   let query = { accountUserId: userId };
@@ -108,7 +143,7 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
         const emailId = email._id;
         const locked = await EmailToProcess.findOneAndUpdate(
           { _id: emailId, status: { $in: allowedStatuses } },
-          { status: "PROCESSING" },
+          { $set: { status: "PROCESSING", processingStartedAt: new Date() } },
           { new: true },
         );
 
@@ -145,6 +180,7 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
                 LLMProcessedAt: new Date(),
                 LLMError: null,
               },
+              $unset: { processingStartedAt: "" },
               $inc: { LLMProcessCount: 1 },
             },
           );
@@ -172,6 +208,7 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
                 LLMError: errorData,
                 LLMProcessedAt: new Date(),
               },
+              $unset: { processingStartedAt: "" },
               $inc: { LLMProcessCount: 1 },
             },
           );
@@ -238,4 +275,5 @@ module.exports = {
   getEmailsToProcess,
   getEmailsToProcessByStatus,
   processEmails,
+  reclaimStaleProcessing,
 };

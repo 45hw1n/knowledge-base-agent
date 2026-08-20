@@ -1,55 +1,49 @@
 const syncEmailsService = require('../services/syncEmailsService');
 const pubsubService = require('../services/pubsubService');
+const gmailService = require('../services/gmailService');
 const User = require('../models/User');
 const AppStatus = require('../models/AppStatus');
+const UserPreferences = require('../models/UserPreferences');
 const { updateAppStatus, updateAppStatusInternal } = require('./updateAppStatusController');
-const { MAX_SYNC_FAILURES } = require('../utils/Constants');
+const { reconcileSyncFailures } = require('../services/syncFailureTracker');
 
-// ─── Sync Failure Helpers ──────────────────────────────────────────────────
-
-/**
- * Increment the failure counter for each messageId in AppStatus.syncFailures.
- * Uses MongoDB $inc so the update is atomic and does not require a full document read.
- *
- * @param {string|ObjectId} userId
- * @param {string[]} failedMessageIds
- */
-async function incrementSyncFailures(userId, failedMessageIds) {
-    if (!failedMessageIds || failedMessageIds.length === 0) return;
-
-    const incOps = {};
-    for (const msgId of failedMessageIds) {
-        // Mongoose Map fields are stored as embedded documents.
-        // MongoDB dot-notation works: syncFailures.<key>
-        incOps[`syncFailures.${msgId}`] = 1;
-    }
-
-    await updateAppStatusInternal(
-        userId,
-        { $inc: incOps }
-    );
-}
+/** How far back to look when a webhook's incremental sync can't be trusted
+ *  (expired/invalid historyId) and there's no emailLastSyncedAt yet. */
+const FALLBACK_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /**
- * From a list of failed messageIds, return only those that are still
- * retryable (i.e., their failure count has NOT yet reached MAX_SYNC_FAILURES).
+ * Recover from a syncHistorySince() failure — almost always Gmail's history
+ * API returning 404/410 because startHistoryId is too old (Gmail only
+ * retains history for a limited window). Unlike the login path
+ * (config/passport.js#triggerLoginSync), a webhook has no natural moment to
+ * re-run this fallback other than the next webhook delivery — without it, a
+ * mailbox whose historyId has expired would silently stop ingesting emails
+ * until the user happens to log in again.
  *
- * @param {string[]} failedMessageIds
- * @param {Map<string,number>|Object} syncFailures  - BEFORE this round's increment
- * @returns {string[]}
+ * Mirrors triggerLoginSync()'s recovery: re-establish a fresh historyId via
+ * setupWatch(), then backfill whatever the broken incremental sync couldn't
+ * cover via a date-window search.
+ *
+ * @returns {Promise<string|null>} the fresh historyId to resume from
  */
-function getRetryableFailures(failedMessageIds, syncFailures) {
-    if (!failedMessageIds || failedMessageIds.length === 0) return [];
+async function recoverFromExpiredHistoryId(userId, displayName) {
+    const TAG = `${displayName} :: ${userId}`;
+    console.warn(`${TAG} :: syncHistorySince failed — attempting expired-historyId recovery`);
 
-    return failedMessageIds.filter(id => {
-        // Support both Mongoose Map and plain object (lean)
-        const count = syncFailures instanceof Map
-            ? (syncFailures.get(id) || 0)
-            : (syncFailures?.[id] || 0);
-        // After this round's increment the count will be count+1.
-        // If count+1 >= MAX_SYNC_FAILURES the message becomes poison — not retryable.
-        return (count + 1) < MAX_SYNC_FAILURES;
-    });
+    const watch = await gmailService.setupWatch(userId);
+    const freshHistoryId = watch?.historyId || null;
+
+    const appStatus = await AppStatus.findOne({ userId }).lean();
+    const prefs = await UserPreferences.findOne({ userId }).lean();
+    const sinceDate = appStatus?.emailLastSyncedAt
+        || prefs?.emailSyncStartDate
+        || new Date(Date.now() - FALLBACK_LOOKBACK_MS);
+
+    console.log(`${TAG} :: Recovery: backfilling via syncEmailsByLookback since ${sinceDate.toISOString()}`);
+    const result = await syncEmailsService.syncEmailsByLookback(userId, sinceDate);
+    console.log(`${TAG} :: Recovery backfill done — processed ${result.processedCount} emails`);
+
+    return freshHistoryId;
 }
 
 /**
@@ -156,48 +150,47 @@ async function processNotificationAsync(message) {
       const appStatus = await AppStatus.findOne({ userId: user._id });
       const syncFailures = appStatus?.syncFailures || new Map();
 
-      const result = await syncEmailsService.syncHistorySince(
-        user._id.toString(),
-        user.historyId,
-        syncFailures
-      );
+      let result;
+      let recoveredHistoryId = null;
+      try {
+        result = await syncEmailsService.syncHistorySince(
+          user._id.toString(),
+          user.historyId,
+          syncFailures
+        );
+      } catch (historyErr) {
+        console.error(
+          `${user.displayName} :: ${emailAddress} :: syncHistorySince threw: ${historyErr.message}`
+        );
+        recoveredHistoryId = await recoverFromExpiredHistoryId(user._id.toString(), user.displayName);
+        result = { processedCount: 0, failedMessageIds: [], newestHistoryId: recoveredHistoryId };
+      }
 
       console.log(
         `${user.displayName} :: ${emailAddress} :: Webhook processed ${result.processedCount} emails, ` +
         `${result.failedMessageIds?.length ?? 0} failed`
       );
 
-      // ── Failure handling ─────────────────────────────────────────────────
-      if (result.failedMessageIds && result.failedMessageIds.length > 0) {
-        // Increment persistent failure counters for all failed messages
-        await incrementSyncFailures(user._id, result.failedMessageIds);
-
-        // Determine which failures are still retryable (count BEFORE increment)
-        const retryableFailures = getRetryableFailures(result.failedMessageIds, syncFailures);
-
-        if (retryableFailures.length > 0) {
-          // Some emails can still recover — hold the cursor so next webhook retries them
-          console.warn(
-            `${user.displayName} :: ${emailAddress} :: ` +
-            `Retaining historyId=${user.historyId} — ${retryableFailures.length} retryable failure(s): ` +
-            `[${retryableFailures.join(', ')}]`
-          );
-        } else {
-          // All failures have been exhausted (poison emails) — safe to advance
-          console.error(
-            `${user.displayName} :: ${emailAddress} :: ` +
-            `All ${result.failedMessageIds.length} failure(s) are now poison emails (>= ${MAX_SYNC_FAILURES} retries). ` +
-            `Advancing historyId anyway to unblock pipeline.`
-          );
-          const newHistoryId = result.newestHistoryId || historyId;
-          await User.updateOne({ _id: user._id }, { $set: { historyId: newHistoryId } });
-          console.log(`${user.displayName} :: ${emailAddress} :: historyId advanced to ${newHistoryId} (after poison-pill drain)`);
-        }
+      if (recoveredHistoryId) {
+        // The incremental cursor was unrecoverable — the fallback already
+        // backfilled the gap via a date-window search, so just adopt the
+        // fresh anchor setupWatch() gave us rather than running the normal
+        // failure-reconciliation policy against a sync that never ran.
+        await User.updateOne({ _id: user._id }, { $set: { historyId: recoveredHistoryId } });
+        console.log(`${user.displayName} :: ${emailAddress} :: historyId reset to ${recoveredHistoryId} after recovery`);
       } else {
-        // ✅ No failures — safe to advance historyId normally
-        const newHistoryId = result.newestHistoryId || historyId;
-        await User.updateOne({ _id: user._id }, { $set: { historyId: newHistoryId } });
-        console.log(`${user.displayName} :: ${emailAddress} :: historyId advanced to ${newHistoryId}`);
+        // ── Failure handling (same policy as manual/login sync) ────────────
+        await reconcileSyncFailures({
+          userId: user._id,
+          failedMessageIds: result.failedMessageIds,
+          priorSyncFailures: syncFailures,
+          context: `${user.displayName} :: ${emailAddress} ::`,
+          onAdvance: async () => {
+            const newHistoryId = result.newestHistoryId || historyId;
+            await User.updateOne({ _id: user._id }, { $set: { historyId: newHistoryId } });
+            console.log(`${user.displayName} :: ${emailAddress} :: historyId advanced to ${newHistoryId}`);
+          },
+        });
       }
 
       await updateAppStatus(user._id, {
@@ -229,4 +222,5 @@ async function processNotificationAsync(message) {
 
 module.exports = {
   handlePubSubNotification,
+  recoverFromExpiredHistoryId,
 };

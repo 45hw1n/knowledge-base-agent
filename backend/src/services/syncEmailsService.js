@@ -6,6 +6,7 @@ const { extractEmailSnapshot } = require('../utils/helpers');
 const { encryptClearText } = require('../utils/emailEncryption');
 const { MAX_SYNC_FAILURES } = require('../utils/Constants');
 const { updateAppStatus } = require('../controllers/updateAppStatusController');
+const { reconcileSyncFailures } = require('./syncFailureTracker');
 const { processEmails } = require('./emailProcessorService');
 const { classifyEmail } = require('../classifier');
 
@@ -83,6 +84,7 @@ async function processEmail(userId, messageId) {
 async function syncRecentEmails(userId) {
     try {
         const appStatus = await AppStatus.findOne({ userId });
+        const syncFailures = appStatus?.syncFailures || new Map();
 
         let query = 'category:inbox';
 
@@ -103,13 +105,44 @@ async function syncRecentEmails(userId) {
         }
 
         let processedCount = 0;
+        const failedMessageIds = [];
+
         for (const messageRef of messages) {
-            await processEmail(userId, messageRef.id);
-            processedCount++;
+            const priorFailures = syncFailures instanceof Map
+                ? (syncFailures.get(messageRef.id) || 0)
+                : (syncFailures?.[messageRef.id] || 0);
+
+            if (priorFailures >= MAX_SYNC_FAILURES) {
+                console.error(
+                    `[syncRecentEmails] ⚠️ Poison email detected — messageId=${messageRef.id} ` +
+                    `has failed ${priorFailures} times (>= MAX_SYNC_FAILURES=${MAX_SYNC_FAILURES}). Skipping permanently.`
+                );
+                continue;
+            }
+
+            try {
+                await processEmail(userId, messageRef.id);
+                processedCount++;
+            } catch (error) {
+                // A single broken message must not abort the whole sync — that
+                // would both drop every message after it in this batch AND
+                // (since emailLastSyncedAt is never advanced past a failure,
+                // see below) keep re-fetching the same window forever if the
+                // failure is not transient.
+                console.error(`[syncRecentEmails] ❌ Failed to process messageId=${messageRef.id}:`, error.message);
+                failedMessageIds.push(messageRef.id);
+            }
         }
 
-        await updateAppStatus(userId, {
-            emailLastSyncedAt: new Date()
+        // Only advance the cursor past this window once every message in it
+        // has either succeeded or been confirmed poison — otherwise a
+        // transient failure would be silently skipped forever on the next sync.
+        await reconcileSyncFailures({
+            userId,
+            failedMessageIds,
+            priorSyncFailures: syncFailures,
+            context: '[syncRecentEmails]',
+            onAdvance: () => updateAppStatus(userId, { emailLastSyncedAt: new Date() }),
         });
 
         return { success: true, processedCount };
@@ -310,7 +343,6 @@ async function syncEmailsByLookback(userId, sinceDate) {
 
         console.log(`📦 Backfill search query: ${query}`);
 
-        // ✅ FIXED: direct call
         const allMessages = await gmailService.listMessages(userId, query);
 
         if (allMessages.length === 0) {
@@ -320,9 +352,25 @@ async function syncEmailsByLookback(userId, sinceDate) {
 
         console.log(`📨 Found ${allMessages.length} messages`);
 
+        const appStatus = await AppStatus.findOne({ userId });
+        const syncFailures = appStatus?.syncFailures || new Map();
+
         let processedCount = 0;
+        const failedMessageIds = [];
 
         for (const messageRef of allMessages) {
+            const priorFailures = syncFailures instanceof Map
+                ? (syncFailures.get(messageRef.id) || 0)
+                : (syncFailures?.[messageRef.id] || 0);
+
+            if (priorFailures >= MAX_SYNC_FAILURES) {
+                console.error(
+                    `[syncEmailsByLookback] ⚠️ Poison email detected — messageId=${messageRef.id} ` +
+                    `has failed ${priorFailures} times (>= MAX_SYNC_FAILURES=${MAX_SYNC_FAILURES}). Skipping permanently.`
+                );
+                continue;
+            }
+
             try {
                 const exists = await EmailToProcess.exists({ messageId: messageRef.id });
 
@@ -332,12 +380,23 @@ async function syncEmailsByLookback(userId, sinceDate) {
                 processedCount++;
 
             } catch (error) {
+                // Do NOT swallow silently — if this message's failure is
+                // transient, it must be retried on the next backfill rather
+                // than being permanently excluded once emailLastSyncedAt
+                // moves past this window.
                 console.error(`❌ Error processing ${messageRef.id}:`, error.message);
+                failedMessageIds.push(messageRef.id);
             }
         }
 
-        await updateAppStatus(userId, {
-            emailLastSyncedAt: new Date()
+        // Only advance the cursor once every message in this window has
+        // either succeeded or been confirmed poison (see syncFailureTracker).
+        await reconcileSyncFailures({
+            userId,
+            failedMessageIds,
+            priorSyncFailures: syncFailures,
+            context: '[syncEmailsByLookback]',
+            onAdvance: () => updateAppStatus(userId, { emailLastSyncedAt: new Date() }),
         });
 
         console.log(`✅ Backfill completed. Processed ${processedCount}`);
