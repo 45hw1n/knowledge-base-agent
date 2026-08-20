@@ -410,7 +410,15 @@ export function SuperTable<TData>({
           className={hasResizableColumns ? "table-fixed" : undefined}
           style={
             hasResizableColumns
-              ? { width: table.getTotalSize() }
+              // min-width (the columns' own declared sum) as a floor, width:
+              // 100% as the target — CSS resolves min-width over width when
+              // they conflict, so the table becomes whichever is larger:
+              // exactly fills its container when columns are narrower than
+              // it, but still grows past it (triggering the wrapper's
+              // overflow-x-auto scroll) when columns are wider — e.g. a
+              // table with many columns that's meant to scroll, not get
+              // squeezed to fit.
+              ? { width: "100%", minWidth: table.getTotalSize() }
               : undefined
           }
         >
