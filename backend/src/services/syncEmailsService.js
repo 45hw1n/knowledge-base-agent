@@ -86,7 +86,11 @@ async function syncRecentEmails(userId) {
         const appStatus = await AppStatus.findOne({ userId });
         const syncFailures = appStatus?.syncFailures || new Map();
 
-        let query = 'category:inbox';
+        // NOTE: "category:inbox" is not a real Gmail search category (valid
+        // values are primary/social/promotions/updates/forums/etc.) — it
+        // silently matched zero messages, always. "in:inbox" is the correct
+        // operator for "message is in the Inbox".
+        let query = 'in:inbox';
 
         if (appStatus && appStatus.emailLastSyncedAt) {
             const secondsSinceEpoch = Math.floor(appStatus.emailLastSyncedAt.getTime() / 1000);

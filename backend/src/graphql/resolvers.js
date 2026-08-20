@@ -320,8 +320,15 @@ const resolvers = {
                     const userFromDb = await User.findById(user._id);
                     const startHistoryId = userFromDb?.historyId;
 
-                    // 1. Ensure Gmail Watch is setup/renewed (The "Ignition Switch")
-                    await gmailService.setupWatch(user._id);
+                    // 1. Ensure Gmail Watch is setup/renewed (The "Ignition Switch").
+                    // Non-fatal, same as the login-triggered sync in passport.js: a
+                    // broken/missing Pub/Sub topic should degrade push notifications,
+                    // not block this pull-based sync from running at all.
+                    try {
+                        await gmailService.setupWatch(user._id);
+                    } catch (watchError) {
+                        console.error(`${user.displayName} :: ${user._id} :: Gmail watch setup failed (continuing with pull sync):`, watchError.message);
+                    }
 
                     let totalProcessedCount = 0;
 
