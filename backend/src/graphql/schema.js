@@ -26,35 +26,35 @@ const typeDefs = gql`
     processedCount: Int
   }
 
-  input ProcessDebitEmailsInput {
+  input ProcessEmailsInput {
     ids: [String]
     status: String
     limit: Int
   }
 
-  type ProcessDebitEmailsResult {
+  type ProcessEmailsResult {
     success: Boolean!
     message: String
     queuedCount: Int
   }
 
-  type GetDebitEmailsToProcessResponse {
+  type GetEmailsToProcessResponse {
     count: Int!
     ids: [ID!]!
   }
 
-  input GetDebitEmailsByStatusInput {
+  input GetEmailsByStatusInput {
     statuses: [String!]!
   }
 
-  type DebitEmailsByStatus {
+  type EmailsByStatus {
     status: String!
     ids: [ID!]!
   }
 
-  type GetDebitEmailsToProcessByStatusResponse {
+  type GetEmailsToProcessByStatusResponse {
     count: Int!
-    data: [DebitEmailsByStatus!]!
+    data: [EmailsByStatus!]!
   }
 
   enum BackfillMode {
@@ -89,10 +89,10 @@ const typeDefs = gql`
     emailLastSyncedAt: String
     onboarded: Boolean
     emailSyncStatus: EmailSyncStatus
-    debitProcessingInProgress: Boolean
-    lastDebitAIProcessStartedAt: String
-    lastDebitAIProcessCompletedAt: String
-    lastDebitAIProcessedCount: Int
+    emailProcessingInProgress: Boolean
+    lastEmailAIProcessStartedAt: String
+    lastEmailAIProcessCompletedAt: String
+    lastEmailAIProcessedCount: Int
     createdAt: String
     updatedAt: String
   }
@@ -327,10 +327,10 @@ const typeDefs = gql`
     currentUser: User
     getAppStatus: AppStatus!
     getUserPreferences: UserPreferences
-    getDebitEmailsToProcess: GetDebitEmailsToProcessResponse!
-    getDebitEmailsToProcessByStatus(
-      input: GetDebitEmailsByStatusInput!
-    ): GetDebitEmailsToProcessByStatusResponse!
+    getEmailsToProcess: GetEmailsToProcessResponse!
+    getEmailsToProcessByStatus(
+      input: GetEmailsByStatusInput!
+    ): GetEmailsToProcessByStatusResponse!
     loginWithGoogle: String!
     getAttachmentDownloadUrl(input: AttachmentDownloadUrlInput!): String!
     entities(input: EntityListRequestInput): EntityListResponse!
@@ -340,7 +340,7 @@ const typeDefs = gql`
   type Mutation {
     syncEmails: SyncEmailsResult
     backfillEmails(input: BackfillEmailsInput!): SyncResult!
-    processDebitEmails(input: ProcessDebitEmailsInput): ProcessDebitEmailsResult
+    processEmails(input: ProcessEmailsInput): ProcessEmailsResult
     updateAppStatus(input: UpdateAppStatusInput!): AppStatus
     testMutation(input: String!): String
     logout: Boolean!

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { ENTITY_TYPES } = require('../classifier/classifier');
 
 const EncryptedTextSchema = new mongoose.Schema(
     {
@@ -10,7 +11,7 @@ const EncryptedTextSchema = new mongoose.Schema(
 );
 
 
-const DebitEmailToProcessSchema = new mongoose.Schema({
+const EmailToProcessSchema = new mongoose.Schema({
     accountUserId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -45,6 +46,24 @@ const DebitEmailToProcessSchema = new mongoose.Schema({
         default: [],
         _id: false
     },
+    // The classifier's candidate list for this email (see
+    // classifier/classifier.js) — persisted at ingestion time so the
+    // orchestrator doesn't need to reclassify. An email is only ever
+    // persisted here once classify() has returned at least one candidate;
+    // this field is never empty on a stored record.
+    classification: {
+        candidates: {
+            type: [
+                {
+                    type: { type: String, enum: ENTITY_TYPES, required: true },
+                    score: { type: Number, required: true },
+                    matchedRules: { type: [String], default: [] }
+                }
+            ],
+            default: [],
+            _id: false
+        }
+    },
     source: {
         type: String,
         enum: ['email'],
@@ -76,7 +95,7 @@ const DebitEmailToProcessSchema = new mongoose.Schema({
         expires: '30d'
     }
 }, {
-    collection: 'debitEmailsToProcess'
+    collection: 'emailsToProcess'
 });
 
-module.exports = mongoose.model('DebitEmailToProcess', DebitEmailToProcessSchema);
+module.exports = mongoose.model('EmailToProcess', EmailToProcessSchema);

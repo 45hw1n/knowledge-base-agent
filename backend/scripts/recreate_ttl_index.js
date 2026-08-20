@@ -4,7 +4,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env.local') });
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
-const DebitEmailToProcess = require('../src/models/DebitEmailToProcess');
+const EmailToProcess = require('../src/models/EmailToProcess');
 
 async function run() {
     if (!process.env.MONGO_URI) {
@@ -15,7 +15,7 @@ async function run() {
     await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ Connected to DB");
 
-    const collection = DebitEmailToProcess.collection;
+    const collection = EmailToProcess.collection;
     
     let indexes = [];
     try {
@@ -33,7 +33,7 @@ async function run() {
         }
     }
     
-    await DebitEmailToProcess.syncIndexes();
+    await EmailToProcess.syncIndexes();
     console.log("⏱ TTL index recreated");
     
     await mongoose.disconnect();

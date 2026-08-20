@@ -108,6 +108,10 @@ async function extractEmailSnapshot(emailData) {
   return {
     metadata,
     encryptedCleanText,
+    // Plaintext body, pre-encryption — needed by callers (e.g. the
+    // classifier) that must read the content but shouldn't reimplement
+    // MIME/HTML parsing or hold their own decryption logic.
+    cleanText,
     bodyHash,
     snippet: snippet || cleanText.slice(0, 200),
     threadId

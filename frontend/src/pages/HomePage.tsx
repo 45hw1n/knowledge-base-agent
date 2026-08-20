@@ -1,6 +1,6 @@
 import { AccessTokenRevokedAlert } from "@/components/AccessTokenRevokedAlert";
 import { PageContent } from "@/components/page-layout";
-import { ProcessDebitEmailAlert } from "@/components/ProcessDebitEmailAlert";
+import { ProcessEmailAlert } from "@/components/ProcessEmailAlert";
 import { EntityList } from "@/features/entities/EntityList";
 
 // TODO: rewrite the search/chat half for Cortex — this currently only
@@ -10,7 +10,7 @@ export default function HomePage() {
   return (
     <PageContent>
       <AccessTokenRevokedAlert />
-      <ProcessDebitEmailAlert />
+      <ProcessEmailAlert />
       <section className="w-full space-y-4">
         <div className="flex flex-col items-start gap-1">
           <h2 className="text-xl font-semibold tracking-tight">Knowledge</h2>

@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const DebitEmailToProcess = require("../models/DebitEmailToProcess");
+const EmailToProcess = require("../models/EmailToProcess");
 const { extractEntitiesFromEmail } = require("../ai/features/extractEntities/orchestrator");
 
 const BATCH_SIZE = 5;
@@ -44,7 +44,7 @@ function chunkArray(arr, size) {
 }
 
 /**
- * Process debit emails by querying Mongo and running them through the AI orchestrator.
+ * Process queued emails by querying Mongo and running them through the AI orchestrator.
  * Uses atomic status transitions to prevent race conditions across concurrent workers.
  * Emails are processed in parallel batches of BATCH_SIZE.
  *
@@ -55,9 +55,9 @@ function chunkArray(arr, size) {
  * @param {number} [input.limit=50] - Max records to process
  * @returns {Object} - { queuedCount }
  */
-async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
+async function processEmails({ ids, status, limit = 50, userId } = {}) {
   if (!userId) {
-    throw new Error("userId is required for processDebitEmails");
+    throw new Error("userId is required for processEmails");
   }
 
   // All branches are scoped to the calling user — prevents cross-tenant access
@@ -87,13 +87,13 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
     query.status = "DETECTED";
   }
 
-  const emails = await DebitEmailToProcess.find(query)
+  const emails = await EmailToProcess.find(query)
     .sort({ createdAt: 1 })
     .limit(effectiveLimit)
     .lean();
 
   console.log(
-    `[DebitEmailProcessor] Found ${emails.length} emails to process (limit was ${effectiveLimit})`,
+    `[EmailProcessor] Found ${emails.length} emails to process (limit was ${effectiveLimit})`,
   );
 
   const allowedStatuses = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"];
@@ -106,18 +106,18 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
     const results = await Promise.all(
       batch.map(async (email) => {
         const emailId = email._id;
-        const locked = await DebitEmailToProcess.findOneAndUpdate(
+        const locked = await EmailToProcess.findOneAndUpdate(
           { _id: emailId, status: { $in: allowedStatuses } },
           { status: "PROCESSING" },
           { new: true },
         );
 
         if (!locked) {
-          const current = await DebitEmailToProcess.findById(emailId)
+          const current = await EmailToProcess.findById(emailId)
             .select("status")
             .lean();
           console.log(
-            `[DebitEmailProcessor] emailId=${emailId} lock failed. Current status: ${current?.status}, allowed: ${allowedStatuses.join(",")}`,
+            `[EmailProcessor] emailId=${emailId} lock failed. Current status: ${current?.status}, allowed: ${allowedStatuses.join(",")}`,
           );
           return 0;
         }
@@ -137,7 +137,7 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
             throw new Error(extractionResult.error);
           }
 
-          await DebitEmailToProcess.updateOne(
+          await EmailToProcess.updateOne(
             { _id: lockedId, status: "PROCESSING" },
             {
               $set: {
@@ -150,13 +150,13 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
           );
 
           console.log(
-            `[DebitEmailProcessor] emailId=${lockedId} processed successfully, entitiesCreated=${extractionResult.entitiesCreated}`,
+            `[EmailProcessor] emailId=${lockedId} processed successfully, entitiesCreated=${extractionResult.entitiesCreated}`,
           );
           return 1;
         } catch (error) {
           const errorData = error?.message || String(error);
           console.error(
-            `[DebitEmailProcessor] emailId=${lockedId} failed: ${errorData}`,
+            `[EmailProcessor] emailId=${lockedId} failed: ${errorData}`,
           );
 
           const isValidationError = errorData.includes(
@@ -164,7 +164,7 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
           );
           const nextStatus = isValidationError ? "FAILED" : "LLM_ERROR";
 
-          await DebitEmailToProcess.updateOne(
+          await EmailToProcess.updateOne(
             { _id: lockedId, status: "PROCESSING" },
             {
               $set: {
@@ -188,13 +188,13 @@ async function processDebitEmails({ ids, status, limit = 50, userId } = {}) {
   }
 
   console.log(
-    `[DebitEmailProcessor] Queued ${queuedCount}/${emails.length} emails`,
+    `[EmailProcessor] Queued ${queuedCount}/${emails.length} emails`,
   );
   return { queuedCount };
 }
 
-async function getDebitEmailsToProcess(userId) {
-  const emails = await DebitEmailToProcess.find(
+async function getEmailsToProcess(userId) {
+  const emails = await EmailToProcess.find(
     { accountUserId: userId, status: "DETECTED" },
     { _id: 1 },
   )
@@ -207,10 +207,10 @@ async function getDebitEmailsToProcess(userId) {
   };
 }
 
-async function getDebitEmailsToProcessByStatus(userId, statuses) {
+async function getEmailsToProcessByStatus(userId, statuses) {
   const grouped = Object.fromEntries(statuses.map((status) => [status, []]));
 
-  const emails = await DebitEmailToProcess.find({
+  const emails = await EmailToProcess.find({
     accountUserId: userId,
     status: { $in: statuses },
   })
@@ -235,7 +235,7 @@ async function getDebitEmailsToProcessByStatus(userId, statuses) {
 }
 
 module.exports = {
-  getDebitEmailsToProcess,
-  getDebitEmailsToProcessByStatus,
-  processDebitEmails,
+  getEmailsToProcess,
+  getEmailsToProcessByStatus,
+  processEmails,
 };

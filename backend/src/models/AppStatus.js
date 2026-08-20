@@ -46,19 +46,19 @@ const AppStatusSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
-    debitProcessingInProgress: {
+    emailProcessingInProgress: {
         type: Boolean,
         default: false
     },
-    lastDebitAIProcessStartedAt: {
+    lastEmailAIProcessStartedAt: {
         type: Date,
         default: null
     },
-    lastDebitAIProcessCompletedAt: {
+    lastEmailAIProcessCompletedAt: {
         type: Date,
         default: null
     },
-    lastDebitAIProcessedCount: {
+    lastEmailAIProcessedCount: {
         type: Number,
         default: 0
     },

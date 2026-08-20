@@ -54,12 +54,12 @@ const SourceSchema = new mongoose.Schema(
       trim: true,
     },
     // Reference to the temporary `emails` record (not yet implemented —
-    // currently the DebitEmailToProcess collection stands in for it).
+    // currently the EmailToProcess collection stands in for it).
     // Required only when source.type is EMAIL; kept optional at the schema
     // level so future non-email source types aren't forced to carry it.
     emailId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'DebitEmailToProcess',
+      ref: 'EmailToProcess',
       required: function () {
         return this.type === 'EMAIL';
       },

@@ -1193,3 +1193,106 @@ with a test specifically for the 1000th ticket.
 Same reasoning already applied to `EmailThread.providerThreadId`: a
 per-user unique index, not a global one — two different users legitimately
 having their own "TKT-001" is expected and correct, not a collision.
+
+---
+
+## Wiring the classifier into live ingestion + DebitEmail→Email rename
+
+### Decision: `classifier.classify()` is now the ingestion gate — an email is only persisted if it matches at least one rule set
+
+**Context:** Every prior phase built the classifier, `EmailThread`, and all
+five typed entities as pure, tested, standalone pieces, explicitly *not*
+wired into the live `syncEmailsService.js` → `DebitEmailToProcess` path
+(flagged repeatedly: "if the intent was actually to wire this into the
+live pipeline right now, say so"). That instruction has now been given.
+This phase is step one of that wiring — ingestion and storage only, not
+the orchestrator/extraction rewrite (still the next phase).
+
+**Change:** `syncEmailsService.processEmail()` now calls `classifyEmail()`
+(the existing normalize+classify convenience wrapper) on every synced
+message before persisting anything. Zero candidates → the email is
+discarded (logged, not stored). One or more candidates → the email is
+persisted with its full `classification.candidates` list attached, so the
+orchestrator phase can consume the classifier's output without
+reclassifying.
+
+**Flagged deviation from the existing message-tracking design:** the
+Invoice/Payment phase established `DebitEmailToProcess` as the global,
+"track every synced message, even ones producing no entity" dedup
+mechanism specifically so duplicate webhook/history-sync deliveries are
+caught by the unique index on `messageId`. Gating storage on classifier
+eligibility means a rejected email now leaves **no record at all** — a
+real, intentional change to that design, not an oversight.
+
+This is judged safe: `classify()` is a pure, side-effect-free function, so
+re-classifying the same rejected message on a later duplicate
+sync/webhook is cheap and always produces the same (still-rejected)
+outcome — there is nothing to deduplicate for a message that was never
+persisted in the first place. The tradeoff actually accepted is losing an
+audit trail of what was discarded and why; nothing currently reads or
+needs that trail, but it's worth knowing if a future requirement
+("show me what Cortex ignored and why") needs it.
+
+### Decision: conversation-linking (matching a new message to an existing Invoice/Ticket by `threadId`) is explicitly orchestrator work, not ingestion work
+
+Per this document's own Scenario 4 (the reply-to-invoice-thread
+walkthrough), deciding whether a reply is actually *relevant* enough to
+append to `conversation[]` — "received 5000, thanks" must be appended,
+"have a great day" must not — is a semantic judgment this project has
+consistently assigned to the AI layer, and `validateConversationMessage()`
+already expects that judgment to have been made before it's called.
+Ingestion's responsibility, already satisfied, is narrower: capture
+`threadId`/`messageId` faithfully on every persisted record so the
+orchestrator can later do the cheap, deterministic half itself
+(`Invoice.findOne({ userId, threadId })` / `Ticket.findOne(...)`) before
+making the AI relevance call. No new ingestion-side lookup was added for
+this — there's nothing to gain by pre-computing it before an orchestrator
+exists to consume it.
+
+### Decision: renamed `DebitEmailToProcess`/`debitEmailProcessorService`/`debitEmailsToProcess` (and `AppStatus`'s `debitProcessingInProgress`/`lastDebitAIProcess*` fields) to generic `Email*` names
+
+**Reasoning:** These names are leftovers from this codebase's origin as an
+"Expense tracker" (see `ab55a47`) — before the finance-specific modules
+were removed and the project became a generic knowledge-base pipeline.
+`syncEmailsService.js` already had a comment admitting this ("Cortex has
+no finance-specific ingestion filter"). Renamed to
+`EmailToProcess`/`emailProcessorService`/`emailsToProcess` (collection)/
+`processEmails`/`getEmailsToProcess`/`getEmailsToProcessByStatus`, and
+`AppStatus.emailProcessingInProgress`/`lastEmailAIProcess*`, across the
+model, service, GraphQL schema/resolvers, and the one frontend component
+that calls them (`ProcessDebitEmailAlert.tsx` → `ProcessEmailAlert.tsx`,
+including fixing its copy, which still said "transaction emails" /
+"synced to your Google Sheet" — stale text from the same finance-era
+origin, unrelated to what Cortex actually does).
+
+**No data migration:** the old `debitEmailsToProcess` collection is
+30-day TTL and `AI_PROVIDER=mock` everywhere today (local and production
+env files) — there is no real extraction traffic to preserve. Old
+documents simply expire under their existing TTL; new ones land in the
+renamed `emailsToProcess` collection.
+
+### Discovered, not fixed: `extractEmailSnapshot` cannot currently be unit-tested directly
+
+While adding test coverage for this phase (`syncEmailsService.js` had
+none at all before this), `utils/helpers.js#extractEmailSnapshot`'s
+`await import('email-reply-parser')` (a dynamic import of an ESM-only
+package) fails under this project's plain Jest config with
+`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` — Jest isn't configured
+with `--experimental-vm-modules` or a babel transform that would handle
+it. This is pre-existing (the import predates this phase) and is exactly
+why no test ever covered this function. Worked around here by mocking
+`extractEmailSnapshot` entirely in `syncEmailsService.test.js` (this
+phase's tests cover what `processEmail` does with its output, not the
+MIME/HTML-parsing internals). Not fixed as part of this phase — it's a
+Jest/tooling configuration change, out of scope for an ingestion-gating
+task — but flagged since it blocks testing this function directly, and
+the new `cleanText` field added this phase couldn't be given its own
+direct unit test as a result.
+
+### Deliberately cut in this phase
+
+- Rewriting the AI orchestrator, or updating `EmailToProcess.status`
+  based on extraction output/error — next phase.
+- Any actual Invoice/Ticket conversation-linking logic — orchestrator
+  work, per above.
+- Fixing the Jest/dynamic-import gap described above.

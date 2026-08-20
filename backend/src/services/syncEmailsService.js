@@ -1,12 +1,13 @@
 const gmailService = require('./gmailService');
-const DebitEmailToProcess = require('../models/DebitEmailToProcess');
+const EmailToProcess = require('../models/EmailToProcess');
 const UserPreferences = require('../models/UserPreferences');
 const AppStatus = require('../models/AppStatus');
 const { extractEmailSnapshot } = require('../utils/helpers');
 const { encryptClearText } = require('../utils/emailEncryption');
 const { MAX_SYNC_FAILURES } = require('../utils/Constants');
 const { updateAppStatus } = require('../controllers/updateAppStatusController');
-const { processDebitEmails } = require('./debitEmailProcessorService');
+const { processEmails } = require('./emailProcessorService');
+const { classifyEmail } = require('../classifier');
 
 /**
  * Process a single email message
@@ -30,19 +31,39 @@ async function processEmail(userId, messageId) {
 
         console.log(`Email processed:`, messageId);
 
-        // Every synced email is queued for entity extraction — Cortex has no
-        // finance-specific ingestion filter (the old debit-transaction regex gate
-        // was removed; there's no equivalent concept for a generic knowledge base).
-        const { metadata, encryptedCleanText, bodyHash, snippet, threadId } =
+        const { metadata, encryptedCleanText, cleanText, bodyHash, snippet, threadId } =
             await extractEmailSnapshot(emailData);
-        const savedEmail = await saveEmailToProcess(userId, { messageId, from, subject, date, metadata, encryptedCleanText, bodyHash, threadId, snippet, attachments });
+
+        // Only emails the classifier recognizes as a plausible knowledge-base
+        // entity (an invoice, ticket, payment, event, or document signal) are
+        // queued at all — everything else (newsletters, personal mail,
+        // marketing) is discarded here rather than persisted and processed.
+        // classify() is a pure, side-effect-free function, so a duplicate
+        // sync/webhook for a discarded message just re-derives the same
+        // "not eligible" outcome — nothing needs to be tracked for it.
+        const { candidates } = classifyEmail({
+            subject: metadata.subject,
+            from: metadata.from,
+            bodyText: cleanText,
+            snippet,
+        });
+
+        if (candidates.length === 0) {
+            console.log(`[Classifier] messageId=${messageId} matched no entity type — discarding`);
+            return { status: 'discarded', messageId };
+        }
+
+        const savedEmail = await saveEmailToProcess(userId, {
+            messageId, from, subject, date, metadata, encryptedCleanText, bodyHash, threadId, snippet, attachments,
+            classification: { candidates },
+        });
 
         // Auto-process if enabled (fire-and-forget)
         if (savedEmail?._id) {
             const prefs = await UserPreferences.findOne({ userId });
             if (prefs?.autoProcess) {
                 console.log(`[AutoProcess] Triggering for emailId=${savedEmail._id}`);
-                processDebitEmails({ ids: [savedEmail._id.toString()], userId })
+                processEmails({ ids: [savedEmail._id.toString()], userId })
                     .catch(err => console.error('[AutoProcess] Failed:', err.message));
             }
         }
@@ -131,9 +152,9 @@ function isEncrypted(value) {
 
 async function saveEmailToProcess(userId, data) {
     try {
-        const { messageId, from, subject, date, encryptedCleanText, threadId, bodyHash, snippet, attachments } = data;
+        const { messageId, from, subject, date, encryptedCleanText, threadId, bodyHash, snippet, attachments, classification } = data;
 
-        const emailToProcess = new DebitEmailToProcess({
+        const emailToProcess = new EmailToProcess({
             accountUserId: userId,
             messageId,
             from: isEncrypted(from) ? from : (encryptClearText(from) || null),
@@ -144,6 +165,7 @@ async function saveEmailToProcess(userId, data) {
             threadId,
             snippet: isEncrypted(snippet) ? snippet : (encryptClearText(snippet) || null),
             attachments: attachments || [],
+            classification: classification || { candidates: [] },
             source: 'email',
             status: "DETECTED",
             LLMProcessedAt: null,
@@ -247,7 +269,7 @@ async function syncHistorySince(userId, startHistoryId, syncFailures = new Map()
 
             try {
                 // Check if message already exists in DB to ensure idempotency
-                const exists = await DebitEmailToProcess.exists({ messageId });
+                const exists = await EmailToProcess.exists({ messageId });
                 if (exists) {
                     console.log(`Skipping already processed message: ${messageId}`);
                     continue;
@@ -302,7 +324,7 @@ async function syncEmailsByLookback(userId, sinceDate) {
 
         for (const messageRef of allMessages) {
             try {
-                const exists = await DebitEmailToProcess.exists({ messageId: messageRef.id });
+                const exists = await EmailToProcess.exists({ messageId: messageRef.id });
 
                 if (exists) continue;
 

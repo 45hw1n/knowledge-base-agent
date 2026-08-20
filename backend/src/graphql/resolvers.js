@@ -3,7 +3,7 @@ const { GraphQLError, GraphQLScalarType, Kind } = require('graphql');
 const { GraphQLUpload } = require('graphql-upload-minimal');
 const syncEmailsService = require('../services/syncEmailsService');
 const gmailService = require('../services/gmailService');
-const debitEmailProcessorService = require('../services/debitEmailProcessorService');
+const emailProcessorService = require('../services/emailProcessorService');
 const authService = require('../services/authService');
 const { onboardUserService } = require('../services/onboardingService');
 const userPreferencesService = require('../services/userPreferencesService');
@@ -96,10 +96,10 @@ const resolvers = {
                     onboarded: false,
                     emailLastSyncedAt: null,
                     emailSyncStatus: "IDLE",
-                    debitProcessingInProgress: false,
-                    lastDebitAIProcessStartedAt: null,
-                    lastDebitAIProcessCompletedAt: null,
-                    lastDebitAIProcessedCount: 0
+                    emailProcessingInProgress: false,
+                    lastEmailAIProcessStartedAt: null,
+                    lastEmailAIProcessCompletedAt: null,
+                    lastEmailAIProcessedCount: 0
                 };
                 console.log("Final returned object (fallback):", result);
                 return result;
@@ -110,10 +110,10 @@ const resolvers = {
                 onboarded: appStatus.onboarded,
                 emailLastSyncedAt: appStatus.emailLastSyncedAt,
                 emailSyncStatus: appStatus.emailSyncStatus || "IDLE",
-                debitProcessingInProgress: appStatus.debitProcessingInProgress || false,
-                lastDebitAIProcessStartedAt: appStatus.lastDebitAIProcessStartedAt || null,
-                lastDebitAIProcessCompletedAt: appStatus.lastDebitAIProcessCompletedAt || null,
-                lastDebitAIProcessedCount: appStatus.lastDebitAIProcessedCount || 0
+                emailProcessingInProgress: appStatus.emailProcessingInProgress || false,
+                lastEmailAIProcessStartedAt: appStatus.lastEmailAIProcessStartedAt || null,
+                lastEmailAIProcessCompletedAt: appStatus.lastEmailAIProcessCompletedAt || null,
+                lastEmailAIProcessedCount: appStatus.lastEmailAIProcessedCount || 0
             };
             return result;
         },
@@ -124,7 +124,7 @@ const resolvers = {
 
             return await userPreferencesService.getUserPreferences(user._id);
         },
-        getDebitEmailsToProcess: async (_, __, { user }) => {
+        getEmailsToProcess: async (_, __, { user }) => {
             if (!user) {
                 return {
                     count: 0,
@@ -133,16 +133,16 @@ const resolvers = {
             }
 
             try {
-                console.log(`Fetching debit emails to process for user: ${user.displayName}`);
+                console.log(`Fetching emails to process for user: ${user.displayName}`);
 
-                const result = await debitEmailProcessorService.getDebitEmailsToProcess(user._id);
+                const result = await emailProcessorService.getEmailsToProcess(user._id);
 
                 return {
                     count: result.count,
                     ids: result.ids,
                 };
             } catch (error) {
-                console.error('Error in getDebitEmailsToProcess:', error);
+                console.error('Error in getEmailsToProcess:', error);
 
                 return {
                     count: 0,
@@ -150,7 +150,7 @@ const resolvers = {
                 };
             }
         },
-        getDebitEmailsToProcessByStatus: async (_, { input }, { user }) => {
+        getEmailsToProcessByStatus: async (_, { input }, { user }) => {
             if (!user) {
                 return {
                     count: 0,
@@ -169,18 +169,18 @@ const resolvers = {
 
             try {
                 console.log(
-                    `Fetching debit emails for user: ${user.displayName}, statuses: ${statuses.join(',')}`
+                    `Fetching emails for user: ${user.displayName}, statuses: ${statuses.join(',')}`
                 );
 
                 const result =
-                    await debitEmailProcessorService.getDebitEmailsToProcessByStatus(
+                    await emailProcessorService.getEmailsToProcessByStatus(
                         user._id,
                         statuses
                     );
 
                 return result;
             } catch (error) {
-                console.error('Error in getDebitEmailsToProcessByStatus:', error);
+                console.error('Error in getEmailsToProcessByStatus:', error);
 
                 return {
                     count: 0,
@@ -559,7 +559,7 @@ const resolvers = {
                 };
             }
         },
-        processDebitEmails: async (_, { input = {} }, { user }) => {
+        processEmails: async (_, { input = {} }, { user }) => {
             if (!user) {
                 return {
                     success: false,
@@ -571,25 +571,25 @@ const resolvers = {
             const lockTimeout = new Date(Date.now() - 5 * 60 * 1000);
             await updateAppStatusInternal(
                 user._id,
-                { $set: { debitProcessingInProgress: false } },
+                { $set: { emailProcessingInProgress: false } },
                 {
-                    debitProcessingInProgress: true,
-                    lastDebitAIProcessStartedAt: { $lt: lockTimeout }
+                    emailProcessingInProgress: true,
+                    lastEmailAIProcessStartedAt: { $lt: lockTimeout }
                 }
             );
 
             const lock = await updateAppStatusInternal(
                 user._id,
                 { $set: {
-                    debitProcessingInProgress: true,
-                    lastDebitAIProcessStartedAt: new Date(),
-                    lastDebitAIProcessedCount: 0
+                    emailProcessingInProgress: true,
+                    lastEmailAIProcessStartedAt: new Date(),
+                    lastEmailAIProcessedCount: 0
                 } },
-                { debitProcessingInProgress: { $ne: true } }
+                { emailProcessingInProgress: { $ne: true } }
             );
 
             if (!lock) {
-                console.log(`[processDebitEmails] Already in progress for user: ${user.displayName}`);
+                console.log(`[processEmails] Already in progress for user: ${user.displayName}`);
                 return {
                     success: true,
                     message: 'Processing already in progress',
@@ -598,8 +598,8 @@ const resolvers = {
             }
 
             try {
-                console.log(`Starting processDebitEmails for user: ${user.displayName}`);
-                const result = await debitEmailProcessorService.processDebitEmails({
+                console.log(`Starting processEmails for user: ${user.displayName}`);
+                const result = await emailProcessorService.processEmails({
                     ...input,
                     userId: user._id,
                 });
@@ -607,8 +607,8 @@ const resolvers = {
                 await updateAppStatusInternal(
                     user._id,
                     { $set: {
-                        lastDebitAIProcessCompletedAt: new Date(),
-                        lastDebitAIProcessedCount: result.queuedCount
+                        lastEmailAIProcessCompletedAt: new Date(),
+                        lastEmailAIProcessedCount: result.queuedCount
                     } }
                 );
 
@@ -618,7 +618,7 @@ const resolvers = {
                     queuedCount: result.queuedCount,
                 };
             } catch (error) {
-                console.error('Error in processDebitEmails mutation:', error);
+                console.error('Error in processEmails mutation:', error);
                 return {
                     success: false,
                     message: `Processing failed: ${error.message}`,
@@ -627,7 +627,7 @@ const resolvers = {
             } finally {
                 await updateAppStatusInternal(
                     user._id,
-                    { $set: { debitProcessingInProgress: false } }
+                    { $set: { emailProcessingInProgress: false } }
                 );
             }
         },

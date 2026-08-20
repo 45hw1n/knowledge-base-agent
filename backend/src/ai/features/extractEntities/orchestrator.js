@@ -6,7 +6,7 @@ const { persistEntities } = require('./repository');
 
 /**
  * Generic document/entity-extraction pipeline (replaces the old
- * transaction-only processDebitEmails orchestrator):
+ * transaction-only processEmails orchestrator):
  *
  *   emailDoc → context (decrypt body + parse any attachments via
  *   Document AI) → prompt → LLM → postProcess → persist to MongoDB
@@ -14,7 +14,7 @@ const { persistEntities } = require('./repository');
  * Works for an email with no attachments (body text only), an email with
  * one or more attachments, or a mix — buildContext handles both.
  *
- * @param {import('mongoose').Document} emailDoc - a DebitEmailToProcess record
+ * @param {import('mongoose').Document} emailDoc - an EmailToProcess record
  * @returns {{ entitiesCreated: number, error: string|null }}
  */
 async function extractEntitiesFromEmail(emailDoc) {

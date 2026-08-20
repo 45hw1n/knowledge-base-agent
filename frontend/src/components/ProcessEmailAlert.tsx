@@ -3,11 +3,11 @@ import { gql, useMutation, useQuery } from "@apollo/client";
 import { Alert, AlertDescription, AlertTitle } from "@/lib/ui/alert";
 import { Button } from "@/lib/ui/button";
 
-const DEBIT_EMAIL_STATUSES = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"] as const;
+const PROCESSABLE_EMAIL_STATUSES = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"] as const;
 
-const GET_DEBIT_EMAILS_TO_PROCESS_BY_STATUS = gql`
-  query GetDebitEmailsToProcessByStatus($input: GetDebitEmailsByStatusInput!) {
-    getDebitEmailsToProcessByStatus(input: $input) {
+const GET_EMAILS_TO_PROCESS_BY_STATUS = gql`
+  query GetEmailsToProcessByStatus($input: GetEmailsByStatusInput!) {
+    getEmailsToProcessByStatus(input: $input) {
       count
       data {
         status
@@ -17,9 +17,9 @@ const GET_DEBIT_EMAILS_TO_PROCESS_BY_STATUS = gql`
   }
 `;
 
-const PROCESS_DEBIT_EMAILS = gql`
-  mutation ProcessDebitEmails($input: ProcessDebitEmailsInput) {
-    processDebitEmails(input: $input) {
+const PROCESS_EMAILS = gql`
+  mutation ProcessEmails($input: ProcessEmailsInput) {
+    processEmails(input: $input) {
       success
       message
       queuedCount
@@ -30,38 +30,38 @@ const PROCESS_DEBIT_EMAILS = gql`
 const GET_APP_STATUS = gql`
   query GetAppStatus {
     getAppStatus {
-      debitProcessingInProgress
+      emailProcessingInProgress
     }
   }
 `;
 
 type GetAppStatusResponse = {
   getAppStatus: {
-    debitProcessingInProgress: boolean;
+    emailProcessingInProgress: boolean;
   };
 };
 
-type DebitEmailsByStatusItem = {
+type EmailsByStatusItem = {
   status: string;
   ids: string[];
 };
 
-type GetDebitEmailsToProcessByStatusResponse = {
-  getDebitEmailsToProcessByStatus: {
+type GetEmailsToProcessByStatusResponse = {
+  getEmailsToProcessByStatus: {
     count: number;
-    data: DebitEmailsByStatusItem[];
+    data: EmailsByStatusItem[];
   };
 };
 
-type ProcessDebitEmailsResponse = {
-  processDebitEmails: {
+type ProcessEmailsResponse = {
+  processEmails: {
     success: boolean;
     message?: string | null;
     queuedCount: number;
   };
 };
 
-export function ProcessDebitEmailAlert() {
+export function ProcessEmailAlert() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -70,12 +70,12 @@ export function ProcessDebitEmailAlert() {
   const [count, setCount] = useState(0);
 
   const { data, loading, refetch } =
-    useQuery<GetDebitEmailsToProcessByStatusResponse>(
-      GET_DEBIT_EMAILS_TO_PROCESS_BY_STATUS,
+    useQuery<GetEmailsToProcessByStatusResponse>(
+      GET_EMAILS_TO_PROCESS_BY_STATUS,
       {
         variables: {
           input: {
-            statuses: [...DEBIT_EMAIL_STATUSES],
+            statuses: [...PROCESSABLE_EMAIL_STATUSES],
           },
         },
         fetchPolicy: "network-only",
@@ -83,8 +83,8 @@ export function ProcessDebitEmailAlert() {
       }
     );
 
-  const [processDebitEmails] = useMutation<ProcessDebitEmailsResponse>(
-    PROCESS_DEBIT_EMAILS
+  const [processEmails] = useMutation<ProcessEmailsResponse>(
+    PROCESS_EMAILS
   );
 
   const { data: appStatusData } = useQuery<GetAppStatusResponse>(GET_APP_STATUS, {
@@ -93,7 +93,7 @@ export function ProcessDebitEmailAlert() {
   });
 
   const serverProcessing =
-    appStatusData?.getAppStatus?.debitProcessingInProgress ?? false;
+    appStatusData?.getAppStatus?.emailProcessingInProgress ?? false;
 
   useEffect(() => {
     if (serverProcessing && !isProcessing) {
@@ -104,18 +104,18 @@ export function ProcessDebitEmailAlert() {
   useEffect(() => {
     if (!serverProcessing && isProcessing) {
       setIsProcessing(false);
-      refetch({ input: { statuses: [...DEBIT_EMAIL_STATUSES] } });
+      refetch({ input: { statuses: [...PROCESSABLE_EMAIL_STATUSES] } });
     }
   }, [serverProcessing]);
 
   const flattenedIds = useMemo(
     () =>
-      data?.getDebitEmailsToProcessByStatus?.data?.flatMap((item) => item.ids) ??
+      data?.getEmailsToProcessByStatus?.data?.flatMap((item) => item.ids) ??
       [],
     [data]
   );
 
-  const pendingCount = data?.getDebitEmailsToProcessByStatus?.count ?? 0;
+  const pendingCount = data?.getEmailsToProcessByStatus?.count ?? 0;
 
   useEffect(() => {
     setIds(flattenedIds);
@@ -145,7 +145,7 @@ export function ProcessDebitEmailAlert() {
     setErrorMessage("");
 
     try {
-      const response = await processDebitEmails({
+      const response = await processEmails({
         variables: {
           input: {
             ids,
@@ -153,27 +153,27 @@ export function ProcessDebitEmailAlert() {
         },
       });
 
-      if (!response.data?.processDebitEmails?.success) {
+      if (!response.data?.processEmails?.success) {
         throw new Error(
-          response.data?.processDebitEmails?.message ||
-            "Something went wrong while processing transactions"
+          response.data?.processEmails?.message ||
+            "Something went wrong while processing emails"
         );
       }
 
-      if (response.data.processDebitEmails.message === 'Processing already in progress') {
+      if (response.data.processEmails.message === 'Processing already in progress') {
         return;
       }
 
       const refreshed = await refetch({
         input: {
-          statuses: [...DEBIT_EMAIL_STATUSES],
+          statuses: [...PROCESSABLE_EMAIL_STATUSES],
         },
       });
 
       const refreshedCount =
-        refreshed.data?.getDebitEmailsToProcessByStatus?.count ?? 0;
+        refreshed.data?.getEmailsToProcessByStatus?.count ?? 0;
       const refreshedIds =
-        refreshed.data?.getDebitEmailsToProcessByStatus?.data?.flatMap(
+        refreshed.data?.getEmailsToProcessByStatus?.data?.flatMap(
           (item) => item.ids
         ) ?? [];
 
@@ -189,7 +189,7 @@ export function ProcessDebitEmailAlert() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Something went wrong while processing transactions"
+          : "Something went wrong while processing emails"
       );
       setIsVisible(true);
       setIsProcessing(false);
@@ -210,7 +210,7 @@ export function ProcessDebitEmailAlert() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0 flex-1">
             <AlertTitle className="text-base font-semibold tracking-tight text-red-400">
-              ⚠️ Something went wrong while processing transactions
+              ⚠️ Something went wrong while processing emails
             </AlertTitle>
             <AlertDescription className="mt-1 text-sm text-muted-foreground">
               {errorMessage}
@@ -235,10 +235,10 @@ export function ProcessDebitEmailAlert() {
         className="border-l-4 border-emerald-500/30 border-l-emerald-500 bg-emerald-500/10 text-emerald-50"
       >
         <AlertTitle className="text-base font-semibold tracking-tight">
-          ✅ All emails synced
+          ✅ All emails processed
         </AlertTitle>
         <AlertDescription className="mt-1 text-sm text-emerald-200/80">
-        Your emails have been processed and synced to your Google Sheet.
+        Cortex has extracted everything it could from your inbox.
         </AlertDescription>
       </Alert>
     );
@@ -251,10 +251,10 @@ export function ProcessDebitEmailAlert() {
           <AlertTitle className="text-base font-semibold tracking-tight">
             📩 We found{" "}
             <span className="tabular-nums text-violet-400">{count}</span>{" "}
-            transaction emails ready to process
+            emails ready to process
           </AlertTitle>
           <AlertDescription className="mt-1 text-sm text-muted-foreground">
-          Process them to generate insights and sync transactions to your Google sheet.
+          Process them to extract entities into your knowledge base.
           </AlertDescription>
         </div>
         <Button
