@@ -1,6 +1,9 @@
 const aiClient = require('../client');
 const { buildInvoicePrompt } = require('./prompts/invoicePrompt');
 const { buildPaymentPrompt } = require('./prompts/paymentPrompt');
+const { buildEventPrompt } = require('./prompts/eventPrompt');
+const { buildTicketPrompt } = require('./prompts/ticketPrompt');
+const { buildDocumentPrompt } = require('./prompts/documentPrompt');
 
 // Dispatch table, not a per-type processor — the mechanics of building a
 // prompt, calling the AI, and parsing its response are identical regardless
@@ -8,6 +11,9 @@ const { buildPaymentPrompt } = require('./prompts/paymentPrompt');
 const PROMPT_BUILDERS = {
     INVOICE: buildInvoicePrompt,
     PAYMENT: buildPaymentPrompt,
+    EVENT: buildEventPrompt,
+    TICKET: buildTicketPrompt,
+    DOCUMENT: buildDocumentPrompt,
 };
 
 /**

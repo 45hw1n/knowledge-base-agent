@@ -4,6 +4,9 @@ const { runStructuredExtraction } = require('./structuredExtraction');
 const { summarizeBody } = require('./textSummaryProcessor');
 const { persistInvoice } = require('./repositories/invoiceRepository');
 const { persistPayment } = require('./repositories/paymentRepository');
+const { persistEvent } = require('./repositories/eventRepository');
+const { persistTicket } = require('./repositories/ticketRepository');
+const { persistDocument } = require('./repositories/documentRepository');
 
 // Per-type repository, keyed the same way as structuredExtraction.js's
 // PROMPT_BUILDERS — one dispatch table, not five near-identical branches.
@@ -13,6 +16,9 @@ const { persistPayment } = require('./repositories/paymentRepository');
 const REPOSITORIES = {
     INVOICE: persistInvoice,
     PAYMENT: persistPayment,
+    EVENT: persistEvent,
+    TICKET: persistTicket,
+    DOCUMENT: persistDocument,
 };
 
 function decryptBodyText(emailDoc) {
