@@ -42,6 +42,12 @@ export function LoginForm({
 
           url = finalUrl.toString();
 
+          // Read once by AppInitializer after the OAuth redirect completes,
+          // to distinguish "just logged in" from a plain page reload of an
+          // already-authenticated session — sessionStorage survives the
+          // full-page redirect but not a fresh tab/browser restart.
+          sessionStorage.setItem("justLoggedIn", "1");
+
           console.log("Redirecting to:", url);
           window.location.href = url;
         } catch (e) {
