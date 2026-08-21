@@ -2,22 +2,13 @@ import { useEffect, useState } from "react";
 import { gql, useMutation, useQuery } from "@apollo/client";
 import { Alert, AlertDescription, AlertTitle } from "@/lib/ui/alert";
 import { Button } from "@/lib/ui/button";
+import { SYNC_EMAILS } from "@/graphql/query/emails/emailSyncQueries";
 
 const GET_APP_STATUS = gql`
   query GetAppStatusForSync {
     getAppStatus {
       emailSyncStatus
       emailLastSyncedAt
-    }
-  }
-`;
-
-const SYNC_EMAILS = gql`
-  mutation SyncEmails {
-    syncEmails {
-      success
-      message
-      processedCount
     }
   }
 `;

@@ -2,30 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { gql, useMutation, useQuery } from "@apollo/client";
 import { Alert, AlertDescription, AlertTitle } from "@/lib/ui/alert";
 import { Button } from "@/lib/ui/button";
+import { GET_EMAILS_TO_PROCESS_BY_STATUS, PROCESS_EMAILS } from "@/graphql/query/emails/emailSyncQueries";
 
 const PROCESSABLE_EMAIL_STATUSES = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"] as const;
-
-const GET_EMAILS_TO_PROCESS_BY_STATUS = gql`
-  query GetEmailsToProcessByStatus($input: GetEmailsByStatusInput!) {
-    getEmailsToProcessByStatus(input: $input) {
-      count
-      data {
-        status
-        ids
-      }
-    }
-  }
-`;
-
-const PROCESS_EMAILS = gql`
-  mutation ProcessEmails($input: ProcessEmailsInput) {
-    processEmails(input: $input) {
-      success
-      message
-      queuedCount
-    }
-  }
-`;
 
 const GET_APP_STATUS = gql`
   query GetAppStatus {
