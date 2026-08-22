@@ -1998,3 +1998,272 @@ viewport <768px, the same `useIsMobile()` breakpoint used elsewhere in this
 codebase) — history sidebar hidden by default, `ChatPanel`'s hamburger
 header bar opens it as a `fixed inset-0 z-30` overlay with a dismissible
 backdrop, composer stays pinned at the bottom with no page-level scroll.
+
+---
+
+## Phase 3 — Chat backend: conversations, intent orchestration, async polling
+
+### Decision: `ChatConversation`/`ChatMessage`, not `Conversation`/`ConversationMessage`
+
+**Reasoning:** `backend/src/services/conversationService.js` and
+`backend/src/models/schemas/ConversationMessageSchema.js` already exist for
+an unrelated feature — capturing email reply-threads embedded in
+`Ticket.conversation[]`/`Invoice.conversation[]`. Naming the new chat models
+`Conversation`/`ConversationMessage` would collide with that vocabulary in
+every future search/grep of this codebase. The `Chat` prefix disambiguates
+the JS identifiers; the Mongo collection names (`conversations`,
+`conversationDetails`) still match the feature's own spec exactly.
+
+### Decision: a fully separate `ai/chatOrchestrator/` tree, reusing only `ai/client`
+
+**Reasoning:** The existing `ai/orchestrator/` pipeline (classify email type
+→ per-type prompt → validate → persist one new entity) and chat's pipeline
+(classify intent → whitelist-validate → multi-source **read** → synthesize)
+share no steps beyond the provider-agnostic `aiClient.generate()` factory.
+Bolting chat onto the existing `PROMPT_BUILDERS`/`REPOSITORIES` dispatch
+tables would conflate two different meanings of the same-looking string
+(`"TICKET"` as a classifier candidate vs. a chat data-source enum value).
+
+### Decision: `dataSources` for a validated intent comes from the registry, never from the LLM's own echoed value
+
+**Bug found during live verification (real OpenAI provider, not mock):**
+asking "What invoices are still unpaid?" produced the graceful
+UNSUPPORTED-style fallback message instead of a real answer. Root cause:
+`validateIntentOutput()` originally *intersected* the LLM's own
+`raw.dataSources` array against the intent's whitelist
+(`requestedSources.filter(s => registryEntry.dataSources.includes(s))`) —
+when the model's chosen intent was valid but its `dataSources` copy had any
+mismatch (plural/casing drift, e.g. `"INVOICES"` vs `"INVOICE"`), every
+source got silently dropped, `dataSources` went empty, and the orchestrator
+treated that exactly like `UNSUPPORTED` (empty `dataSources` → no retrieval
+→ graceful message), even though the intent itself was correct. **Fix:**
+once an intent is validated against `INTENT_REGISTRY`, its `dataSources` are
+read directly from the registry entry (`registryEntry.dataSources`) —
+never from the LLM's output at all. The mapping intent→dataSources is
+already unambiguous once the intent is known; asking the LLM to also state
+it and then trusting that copy added a failure mode with no corresponding
+benefit. The intent prompt's requested JSON shape was simplified to
+`{intent, filters}` accordingly (no `dataSources` field asked for). Caught
+by testing against the real provider, not the mock — the mock's simpler
+keyword-matching never exercised this exact case, which is itself a decision
+point about the limits of mock-based-only verification for future phases.
+
+### Decision: filter whitelisting is value-level, not just key-level
+
+**Reasoning:** Whitelisting only the filter *keys* an intent accepts still
+lets an LLM (or, later, prompt-injected content it was shown) pass a Mongo
+operator object as a "value" — e.g. `{status: {"$ne": null}}`. Every filter
+key maps to a typed sanitizer function (`filterSanitizers.js`) that returns
+either a safe primitive/date-range object or `undefined` (never passes
+through as-is); `undefined` means "drop this filter," never "pass it
+through." The repository read functions (`find*ByFilters`) additionally
+never spread `filters` into a Mongo query — they read only the specific
+sanitized keys they expect, so an unexpected key can't reach Mongo even if
+some future whitelist gap let it through validation.
+
+### Decision: `sources[].entityId` is always `Entity._id`, never the typed child's own `_id`
+
+**Reasoning:** The frontend's `EntityDetailSheet`/`GET_ENTITY_DETAIL` query
+is keyed exclusively on the Entity registry row's id, not the typed child
+document's own `_id` — confirmed by reading
+`frontend/src/graphql/query/entities/entitiesQueries.ts` directly rather
+than assuming. Every new repository read function (`ticketRepository.js`
+etc.) joins its typed-child results to `Entity` via a batched
+`Entity.find({entityId: {$in: childIds}, type})` lookup and returns
+`entity._id` as `entityId` — verified live in the browser by clicking two
+different source chips from the same answer and confirming each opened the
+correct, distinct invoice.
+
+### Decision: two separate `aiClient.generate()` calls, not one combined prompt
+
+**Reasoning:** Intent-extraction and response-generation are separated by a
+hard sequential dependency — the response can't be grounded in retrieved
+data that doesn't exist yet at intent-extraction time. This mirrors the
+existing extraction pipeline's own precedent of separate calls for separate
+concerns (`structuredExtraction.js` + `textSummaryProcessor.js`), and keeps
+each of the five error codes (`ORCHESTRATION_FAILED`/`INVALID_QUERY` vs.
+`DATA_RETRIEVAL_FAILED` vs. `RESPONSE_GENERATION_FAILED`) attributable to
+the specific step that actually failed.
+
+### Decision: no global/singleton lock for chat message processing
+
+**Reasoning:** Unlike email sync (`AppStatus`'s `emailSyncStatus` lock,
+guarding one shared per-user job), each chat message is an independent unit
+of work — there's nothing to serialize. The one real race (double-submitting
+"new conversation" before the first row exists) has no backend fix because
+`conversationId` is server-generated: two rapid submits would legitimately
+create two separate conversations, not corrupt shared state. Fixed
+entirely on the frontend — `ChatComposer` disables its textarea/send button
+for the duration of the in-flight request.
+
+### Decision: fire-and-forget async processing, no job queue
+
+**Reasoning:** Reused the exact pattern already established by
+`webhookController.js`'s `processNotificationAsync` — respond to the HTTP
+request immediately (`201 {conversationId, messageId, status:'PROCESSING'}`)
+and only then call the async pipeline detached (`.catch(console.error)`,
+no `await`). No Bull/BullMQ or other job-queue library exists in this
+codebase, and chat's per-message workload doesn't need one — status is
+persisted directly on the `ChatMessage` document, which is what makes the
+frontend's short-polling loop correct: the backend keeps processing
+independently of whether the frontend is still polling, and the polling
+endpoint always reflects the backend's own persisted state, never something
+the frontend decided.
+
+**Not built (explicit gap, mirrors an existing one):** no stale-PROCESSING
+sweep for a message whose async processing died mid-flight (e.g. a server
+restart before `completeAssistantMessage`/`failAssistantMessage` ran) — the
+message stays `PROCESSING` forever. `AppStatus`'s email-sync lock has the
+same class of gap (a stale-lock timeout only, not a full recovery sweep).
+Worth a follow-up if it surfaces against real usage, not built speculatively
+here.
+
+### Decision: frontend polling isolated behind one hook (`useMessageStatusPoll`)
+
+**Reasoning:** All `setInterval`/timeout logic for short-polling lives in a
+single hook returning `{status, message, sources, error, refresh,
+isTimedOut}`. `ChatPanel` and the Zustand store only ever consume that
+shape — swapping to SSE/WebSocket later means replacing what's inside this
+one file with an equivalent-shaped subscription, without touching the
+conversation store or `ChatPanel`'s rendering logic at all. `TIMEOUT` is a
+frontend-only state layered on top of backend status after
+`MAX_POLL_ATTEMPTS` (20 × 3s = 60s) — never written back to the server, and
+the same hook instance is deliberately kept mounted through a
+PROCESSING→TIMEOUT transition (by tracking the message while its status is
+either) so `refresh()` stays callable from the same instance rather than
+being lost to a remount.
+
+**Frontend gap found and fixed during verification:** a new conversation's
+AI-generated title (set server-side, in parallel with orchestration) never
+appeared in the history sidebar until an unrelated full page reload — the
+store's conversation list was only ever fetched once, on `ConversationsPage`
+mount. Fixed by having `ChatPanel` refetch the conversation list
+(`loadConversations()`) whenever its tracked message's poll status reaches
+a terminal state (`COMPLETED`/`FAILED`) — by then the title-generation call
+has already completed server-side (it runs before orchestration in
+`processNewConversationAsync`), so the refetch is guaranteed to pick up the
+real title, not the `"New conversation"` placeholder.
+
+**Verified end-to-end against the real OpenAI provider (not just the mock),
+using real synced data:** new-conversation flow (title generation, PROCESSING
+→ COMPLETED transition, source chips), existing-conversation follow-up in a
+different data source (tickets) within the same thread with no title
+regeneration, full transcript + title reload on a hard page refresh, and
+clicking two different source chips from the same answer opening two
+distinct, correct entity detail sheets.
+
+---
+
+## Phase 4 — Full-field filtering + multi-source (cross-entity) queries
+
+### Bug found: "How many tickets have high urgency?" → "I didn't find anything matching that"
+
+Ticket TKT-003 genuinely has `urgency: 'HIGH'`, but the Phase 3 intent
+registry only exposed `status`/`dateRange`/`keyword` as filterable fields
+for tickets — `urgency`/`priority` had no filter path at all. The LLM,
+lacking a real place to put "high urgency," most likely folded it into the
+free-text `keyword` filter, producing a title-substring search for "high"
+that matched nothing (no ticket title contains that word). **Fix:** added
+`urgency`/`priority` as whitelisted `TICKET` filters, sanitized against
+`Ticket.TICKET_LEVELS`.
+
+### Decision: drop named intents (`GET_TICKETS` etc.) entirely — the LLM names data sources directly
+
+**Context:** the user also wanted the same full-field treatment for
+Documents/Events/Invoices/Payments, plus support for cross-entity questions
+like "Plan my day" (needs today's `EVENT`s **and** open/urgent `TICKET`s
+retrieved together in one turn). The Phase 3 design — one named intent maps
+to exactly one hardcoded data source with one shared filter set — cannot
+express that at all.
+
+**Reasoning:** once the LLM can freely combine data sources, a named intent
+(`GET_TICKETS`) becomes a redundant label that must stay in sync with a
+`dataSource` value that already fully determines behavior on its own —
+exactly the "trust the LLM's own copy of a fact the registry already
+knows" bug shape the Phase 3 `dataSources`-echo bug (documented above)
+already burned once. Recreating that one level up (an `intent` string that
+must agree with a `dataSource`) was rejected. The wire contract between the
+two AI calls changed from `{intent, filters}` to `{queries:
+[{dataSource, filters}, ...]}` — the LLM names one or more data sources
+directly, each with its own independently-validated filter set.
+`backend/src/ai/chatOrchestrator/intentRegistry.js` was deleted outright
+(not kept alongside the new file) and replaced by
+`dataSourceRegistry.js`'s `DATA_SOURCE_FILTERS` (keyed directly by data
+source name) + `validateQueries()` — keeping both would have reintroduced
+the exact dual-source-of-truth problem being fixed. `UNSUPPORTED` stopped
+being a named sentinel value; an empty (or fully-invalid) `queries` array
+is the graceful-fallback signal now, a strict generalization of the old
+"dataSources.length === 0" check rather than a new code path.
+
+**`retrieveData`'s signature changed** from `{dataSources, filters}` (one
+filter set shared across every requested source) to `{queries}` (an array
+of independently-filtered `{dataSource, filters}` pairs) —
+`backend/src/ai/chatOrchestrator/dataAccess/index.js`. This is the one
+change that actually makes "different filters per source in one turn"
+possible. `generateResponse`/`buildResponsePrompt`
+(`responseGenerator.js`) needed **no shape change** — they already accepted
+`Record<dataSource, rows[]>` with possibly multiple keys from day one.
+
+**Defensive cap:** `MAX_QUERIES_PER_TURN = 5` in `validateQueries` — an LLM
+naming an unreasonable number of data sources in one turn gets truncated,
+not trusted wholesale. A malformed/unwhitelisted `dataSource` entry in the
+array is dropped silently, same "don't fail the whole turn over one bad
+entry" philosophy as the original per-source dataSources filtering.
+
+### Decision: inject the actual current date into the intent prompt, computed per-turn at the call site
+
+**Reasoning:** `buildIntentPrompt` told the LLM to "resolve relative date
+language yourself" but never actually told it what today's date *is* — a
+real, independent prompt bug (not just a "Plan my day" nice-to-have) that
+made every relative-date question ("meetings today," "invoices due this
+week") silently unable to resolve to a correct absolute filter.
+`orchestrateChatTurn` (`backend/src/ai/chatOrchestrator/index.js`) now
+computes `const now = new Date()` once per call and passes it into
+`buildIntentPrompt({input, history, now})`. Deliberately NOT a module-level
+constant inside `intentPrompt.js` — that would be evaluated once at
+`require()` time (process start) and silently go stale for the lifetime of
+a long-running server, reintroducing the exact bug being fixed. The
+sanitizers stay deliberately "dumb": `sanitizeDateRange` still only
+validates already-absolute ISO dates and never interprets relative
+language — resolving "today" is the LLM's job, now that it's actually told
+what today is.
+
+### Decision: person-name filtering widens `keyword`, not a new filter key per person field
+
+**Reasoning:** a separate `issuerName`/`payerName`/`organizerName` key per
+entity would just be `sanitizeText` again under a different name — pure
+duplication for zero new capability, and users don't naturally ask "filter
+payer name but not payee name," they ask "payments from Acme." Invoice/
+Payment already searched `issuer.name`/`payer.name`/`payee.name` via
+`keyword` before this phase; extended the same pattern to Event
+(`organizer.name`, `attendees[].name` via `$elemMatch`) and Document
+(`issuer.name`, `parties[].name` via `$elemMatch`). No new sanitizer
+needed — reuses the already-audited `sanitizeText`/`escapeRegExp` path
+rather than adding a second one.
+
+### Decision: `dateRange` always means "created," a second date gets its own `<field>Range` key
+
+**Reasoning:** consistent naming beats ad-hoc per-type meaning. `dateRange`
+targets `createdAt` on every type. Event (`startTime`) and Payment
+(`paidAt`) already had exactly one meaningful business date, correctly
+mapped to `dateRange` from Phase 3 — no second key needed. Invoice gained
+`dueDateRange` (→ `dueDate`) and Document gained `effectiveDateRange`/
+`expiryDateRange` (→ `effectiveDate`/`expiryDate`) as genuinely distinct
+questions from "when was this created" ("invoices due this week" ≠
+"invoices created this week"). All reuse the existing `sanitizeDateRange`
+sanitizer — only the Mongo field each one targets differs, in the
+repository's query-building code.
+
+### Decision: new `sanitizeAmountRange({min?, max?})`, same contract as `sanitizeDateRange`
+
+For Invoice/Payment `amount.value` range queries ("invoices over $1000").
+Rejects non-finite values and rejects an incoherent range (`min > max`)
+outright rather than applying half of it — `undefined` means reject, never
+partially trust, same convention as every other sanitizer in
+`filterSanitizers.js`.
+
+**Not built:** amount-range/date-range filtering for Ticket (no amount
+field exists) or cross-referencing linked Payments' amounts onto Invoice
+queries (e.g. "invoices with no payments yet") — real, plausible follow-up
+questions, but out of scope for this pass; would need a join beyond the
+single-collection `find()` every reader does today.
