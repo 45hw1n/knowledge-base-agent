@@ -1558,3 +1558,190 @@ than needing special-case recovery logic.
 - Native structured-output modes (e.g. Gemini's `responseSchema`) — prompts
   still ask for free-text JSON, parsed via fence-stripping + `JSON.parse`,
   consistent with the rest of this codebase's AI-response handling so far.
+
+---
+
+## Ticket/Event/Document Prompts + Repositories (closing the gap the prior phase deferred)
+
+Per the prior phase's own "deliberately not built" list — `PROMPT_BUILDERS`/
+`REPOSITORIES` only had `INVOICE`/`PAYMENT` entries, so an email correctly
+classified as `EVENT`/`TICKET`/`DOCUMENT` always failed extraction with
+`No extraction prompt configured for type "X"`, even though the classifier
+rules, Mongoose models, and `validateExtracted*` functions for all three
+already existed from earlier phases.
+
+### Decision: same per-type prompt/repository split as Invoice/Payment, no new shared processor
+
+`prompts/eventPrompt.js`/`ticketPrompt.js`/`documentPrompt.js` and
+`repositories/eventRepository.js`/`ticketRepository.js`/`documentRepository.js`
+mirror `invoicePrompt.js`/`invoiceRepository.js` exactly — same
+source-agnostic, never-guess prompt instructions; same idempotent-on-
+`(userId, messageId)` persist-then-`createEntityForTypedChild` shape. Two
+intentional omissions, both because the source of truth for that data lives
+elsewhere and extraction has no way to supply it correctly:
+- `Event.attachments[].documentId` (a reference to a separately-extracted
+  Document entity) is never asked for — reconciling "which Document does
+  this Event's attachment correspond to" needs the same kind of
+  evidence-based matching this document has deferred every time it's come
+  up (Payment↔Invoice, Ticket duplicate/parent), not a single extraction
+  pass's guess.
+- `Document.attachments[].attachmentId`/`fileName` likewise isn't asked for
+  — those are physical-file references the app already has from
+  `emailDoc.attachments`, never AI-supplied.
+
+### Deliberately not built
+
+Populating `Document.attachments` from `emailDoc.attachments` in
+`documentRepository.js` (trivial, but no current reader needs it) and the
+Event↔Document attachment-linking mentioned above — both left as schema-
+supported, code-empty, same as Payment's manual-link mutation above.
+
+---
+
+## Fixing `getAppStatus`'s Date fields — a real bug found while building a new consumer
+
+**Context:** `LastSyncedAt` (a new UI component, see below) was the first
+thing to actually *render* `getAppStatus.emailLastSyncedAt`. Existing
+consumers (`SyncEmailsAlert`) fetched the field but never displayed it, so
+this bug was latent and invisible until something finally read the value.
+
+**The bug:** `resolvers.js`'s `getAppStatus` resolver returned the raw
+Mongoose `Date` object straight into a GraphQL `String`-typed field.
+`GraphQLString.serialize()` calls `.valueOf()` on anything object-shaped
+before falling back to `String()` — for a `Date`, `.valueOf()` returns the
+epoch-millisecond number, so the client received `"1787303164237"`, not an
+ISO string. `new Date("1787303164237")` does **not** parse that as epoch
+millis (only `new Date(number)` does) — it tries to parse it as a date
+string, fails, and produces `Invalid Date`.
+
+**Fix:** `.toISOString()` explicitly on all three Date-typed fields
+(`emailLastSyncedAt`, `lastEmailAIProcessStartedAt`,
+`lastEmailAIProcessCompletedAt`) before returning them from the resolver.
+
+**Why this wasn't caught earlier:** exactly the same reasoning as this
+document's very first "regex before AI" framing, inverted — a field nobody
+renders can silently carry wrong data indefinitely; the bug surfaces the
+moment, and only the moment, a real consumer exists. Worth remembering next
+time a "found: 0 emails" or "not synced yet" state looks suspicious with
+real data underneath it.
+
+---
+
+## Sync/Process Banners Gated to Dev-Only
+
+**Context:** `SyncEmailsAlert`/`ProcessEmailAlert` are manual-trigger UI —
+useful locally because this environment's Gmail Pub/Sub watch is currently
+misconfigured (`Invalid topicName does not match projects/.../topics/*`,
+observed repeatedly this session), so nothing else keeps the local inbox
+in sync. In production, the webhook does that job automatically.
+
+### Decision: gated behind the existing `config.isLocal` (`import.meta.env.DEV`), reusing the one precedent already in this codebase
+
+`login-form.tsx` already had exactly one env-gated branch
+(`if (config.isLocal) { ... }`), so both components adopt the identical
+pattern rather than inventing a new env-check convention: `skip:
+IS_PRODUCTION` on every `useQuery` (stops the polling network calls
+outright, not just the render) plus an early `return null`. No backend
+change — these are pure dev-convenience UI, not something a production user
+should ever need or see.
+
+---
+
+## Reactive Sync Status — Race Condition Fix + Unified Toast UX
+
+**Context:** `LastSyncedAt` (adaptive-poll status indicator) and
+`AppInitializer`'s login-triggered toast were built independently and only
+covered the login case. Investigating "what happens in the UI when mail
+arrives via webhook mid-session" (asked directly, not assumed) surfaced
+three real problems, not one:
+
+1. A poll-driven indicator can miss a fast sync/process cycle entirely — it
+   can start and finish between two 10s-apart polls, showing no spinner and
+   no tick, just a timestamp that silently moved.
+2. **The AppStatus bookkeeping the indicator depends on
+   (`emailProcessingInProgress`, `lastEmailAIProcess*`) was only ever
+   written by the `processEmails` GraphQL resolver** — the webhook's
+   fire-and-forget autoProcess call (`syncEmailsService.js`, inside
+   `processEmail()`) called `emailProcessorService.processEmails()`
+   directly, bypassing the resolver entirely. So a webhook-triggered
+   extraction was completely invisible to any polling frontend, not just
+   racily visible.
+3. `processEmail()` fired one autoProcess call **per matched email** — a
+   burst of N emails in one webhook delivery meant N separate, uncoordinated
+   `processEmails()` calls racing for the same lock, instead of one
+   coordinated cycle.
+
+### Decision: move the AppStatus lock/bookkeeping from the resolver into `emailProcessorService.processEmails()` itself
+
+Same lock-acquire/execute/finally-release shape that already existed in
+`resolvers.js` (mirroring the webhook's own `emailSyncStatus` lock pattern,
+per the idempotency-hardening phase above), just relocated so every caller
+— the resolver **and** the webhook's direct call — gets identical tracking.
+The resolver becomes a thin wrapper: call the service, map its
+`alreadyInProgress` sentinel back to the pre-existing `"Processing already
+in progress"` response shape so nothing downstream (`ProcessEmailAlert.tsx`'s
+special-case check) needed to change.
+
+### Decision: batch the autoProcess trigger per sync call, not per email
+
+`processEmail()` now returns the saved email's id instead of triggering
+anything itself; `syncRecentEmails`/`syncHistorySince`/`syncEmailsByLookback`
+each collect ids across their loop and fire **one** `processEmails({ids,
+userId})` call after the loop if `autoProcess` is on. This is the direct
+answer to "what happens when multiple emails arrive close together": Gmail's
+`historyId`-based sync already coalesces a burst into one `listHistory()`
+call (confirmed, not assumed, by reading the pagination loop); this makes
+the *processing* phase coalesce the same way, so N emails produce exactly
+one `emailProcessingInProgress` pulse and one accurate count. Two sync
+attempts that genuinely overlap still resolve the same way every lock in
+this codebase already does — the loser's emails stay `DETECTED`, picked up
+by whichever call next succeeds; nothing is lost, only deferred.
+
+### Decision: the race fix is "detect completion two ways," not "poll faster"
+
+`AppInitializer` (the one component mounted for the app's entire lifetime,
+confirmed via `routes/index.tsx`) became the single poller and the single
+place edge-detection happens, replacing two independent, potentially-
+disagreeing `useQuery` polls (`LastSyncedAt` had its own) with one shared
+`useAppStore.syncStatus`. Completion fires on *either* a clean falling edge
+of `syncing` *or* `emailLastSyncedAt` having visibly advanced since the last
+tick even though `syncing` was never observed true — the second branch is
+what actually closes the race: a cycle fast enough to start and finish
+between two polls still gets caught on the very next tick, because the
+timestamp moved even though the boolean never did. Speeding up the poll
+interval would only ever shrink the race window, never close it.
+
+### Decision: one toast-producing code path, not two competing ones
+
+The temptation was to keep `runAutoSync`'s existing `toast.loading`/
+`toast.success` calls for login and bolt a second, independent toast
+mechanism onto the passive poller for webhook-triggered syncs — risking
+both firing for the same underlying event. Instead, `handleStatusTick` is
+the *only* function that ever creates or resolves a toast; `runAutoSync`
+sets an `isOwnTriggeredRef` flag (which only changes toast *copy* —
+`"Syncing emails..."` vs `"New emails detected. Sync in progress."`) and
+runs two explicit `GET_SYNC_STATUS` queries immediately before and after its
+own mutations. Those two explicit checks, not the passive poll interval, are
+what give the *login* toast a zero-race guarantee independent of poll
+timing — the same machinery that fixes the general race also makes the
+login case race-free by construction rather than by coincidence of timing.
+
+### Deliberately not built
+
+- A real push channel (GraphQL subscriptions/WebSockets) instead of
+  polling — would close the detection-latency gap (up to the poll interval)
+  entirely rather than just the "did we ever see it happen" gap this phase
+  closes. Not pursued: no subscription infrastructure exists anywhere in
+  this codebase yet, and the timestamp-advanced fallback already makes
+  polling *correct*, just not instantaneous — a bigger architectural change
+  than this specific race warranted.
+- Fixing the Pub/Sub watch topic-name misconfiguration observed repeatedly
+  this session (`Invalid topicName does not match projects/.../topics/*`)
+  — a deployment/config issue, not a code path this phase touched; flagged
+  because as configured today, none of the webhook-triggered behavior above
+  actually fires in this environment until it's fixed.
+- Surfacing individual failed extractions to a production user at all —
+  `ProcessEmailAlert`'s retry UI is now dev-only (see above), so a
+  webhook-ingested email that fails extraction in production is currently
+  invisible and unretryable by any user action. Flagged as a real gap
+  opened by the dev-only gating decision, not closed by this phase.
