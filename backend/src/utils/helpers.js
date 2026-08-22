@@ -36,17 +36,21 @@ async function extractEmailSnapshot(emailData) {
   // -------------------------
   // 2️⃣ Extract Raw Body (Recursive)
   // -------------------------
+  // Returns { text, mimeType } (or null) rather than a bare string — the
+  // caller needs to know which MIME part actually supplied the text so it
+  // never has to content-sniff for HTML (see step 3's comment for why that
+  // was a real bug).
   function extractBody(part) {
-    if (!part) return '';
+    if (!part) return null;
 
     // If text/plain
     if (part.mimeType === 'text/plain' && part.body?.data) {
-      return decodeBase64(part.body.data);
+      return { text: decodeBase64(part.body.data), mimeType: 'text/plain' };
     }
 
     // If text/html
     if (part.mimeType === 'text/html' && part.body?.data) {
-      return decodeBase64(part.body.data);
+      return { text: decodeBase64(part.body.data), mimeType: 'text/html' };
     }
 
     // If multipart
@@ -57,21 +61,30 @@ async function extractEmailSnapshot(emailData) {
       }
     }
 
-    return '';
+    return null;
   }
 
   function decodeBase64(data) {
     return Buffer.from(data, 'base64').toString('utf-8');
   }
 
-  let rawBody = extractBody(payload);
-
-  if (!rawBody) rawBody = snippet || '';
+  const extractedBody = extractBody(payload);
+  let rawBody = extractedBody?.text || snippet || '';
 
   // -------------------------
   // 3️⃣ Convert HTML → Text
   // -------------------------
-  if (/<[a-z][\s\S]*>/i.test(rawBody)) {
+  // Only ever convert when the source part we actually extracted from WAS
+  // text/html — never content-sniff via a regex like /<[a-z][\s\S]*>/i.
+  // That regex matches any plain-text quote header too (e.g. "...Ashwin S
+  // <s.ashwin@example.com> wrote:" looks exactly like an HTML tag to it),
+  // wrongly running a genuinely plain-text body through html-to-text's
+  // convert() — which collapses all line breaks into spaces. Once the text
+  // is one flattened line, EmailReplyParser below (which depends on line
+  // boundaries to find where a quote starts) can no longer strip the
+  // quoted reply chain at all. Discovered via real conversation-message
+  // content still containing the full quoted thread — see decisions.md.
+  if (extractedBody?.mimeType === 'text/html') {
     rawBody = convert(rawBody, {
       wordwrap: false,
       selectors: [
