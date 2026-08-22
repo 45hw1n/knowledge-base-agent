@@ -1,6 +1,5 @@
-import { ExternalLink, Paperclip } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { ConversationMessage, Person } from "@/mocks/entities.types";
+import { ExternalLink } from "lucide-react";
+import type { Person } from "@/mocks/entities.types";
 import { formatDateTime } from "./format";
 
 export function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
@@ -31,48 +30,11 @@ export function PersonLine({ person }: { person: Person | null }) {
   );
 }
 
-// Shared by Ticket/Invoice/Payment detail views — all three carry the same
-// ConversationMessage[] shape (see entities.types.ts).
-export function ConversationThread({ messages }: { messages: ConversationMessage[] }) {
-  if (messages.length === 0) {
-    return <p className="text-sm text-muted-foreground">No conversation captured.</p>;
-  }
-  return (
-    <div className="space-y-3">
-      {messages.map((message) => (
-        <div
-          key={message.messageId}
-          className={cn(
-            "rounded-lg border p-3 text-sm",
-            message.direction === "SENT" ? "ml-6 bg-primary/5" : "mr-6 bg-muted/40"
-          )}
-        >
-          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-            <span>{message.direction === "SENT" ? "Sent" : "Received"}</span>
-            <span>{formatDateTime(message.timestamp)}</span>
-          </div>
-          <p className="whitespace-pre-wrap">{message.content}</p>
-          {message.attachments.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {message.attachments.map((attachment) => (
-                <span
-                  key={attachment.attachmentId}
-                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground"
-                >
-                  <Paperclip className="h-3 w-3" />
-                  {attachment.fileName}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // Shared footer across all five detail views — every typed record carries
-// the same source/timestamp provenance fields.
+// the same source/timestamp provenance fields. Rendered by EntityDetailSheet
+// as ResponsiveSheet's pinned `footer` slot (outside the scrollable content
+// area), not inline at the end of each *Detail.tsx component — so it's
+// always visible: sticky at the bottom on desktop, non-scrolling on mobile.
 export function SourceFooter({
   sourceUrl,
   createdAt,
