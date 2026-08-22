@@ -1,5 +1,5 @@
 import { useMutation } from "@apollo/client";
-import { Home, LogOut, Settings } from "lucide-react";
+import { Home, LogOut, MessagesSquare, Settings } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import CortexLogo from "@/assets/cortex-logo.svg";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
@@ -32,6 +32,7 @@ type SidebarNavItem = {
 
 const navItems: SidebarNavItem[] = [
   { label: "Home", href: "/home", icon: Home },
+  { label: "Conversations", href: "/conversations", icon: MessagesSquare },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

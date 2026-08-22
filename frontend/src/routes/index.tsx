@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { AppInitializer } from "@/components/AppInitializer";
 import AppLayout from "@/layouts/AppLayout";
+import ConversationsPage from "@/pages/ConversationsPage";
 import HomePage from "@/pages/HomePage";
 import LoginPage from "@/pages/LoginPage";
 import PrivacyPolicyPage from "@/pages/PrivacyPolicyPage";
@@ -22,6 +23,8 @@ export function AppRoutes() {
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/home" element={<HomePage />} />
+            <Route path="/conversations" element={<ConversationsPage />} />
+            <Route path="/conversations/:conversationId" element={<ConversationsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Route>
