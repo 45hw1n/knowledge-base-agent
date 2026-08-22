@@ -36,7 +36,10 @@ describe('structuredExtraction', () => {
 
   describe('runStructuredExtraction', () => {
     it('returns an error for a type with no configured prompt builder', async () => {
-      const { data, error } = await runStructuredExtraction('some text', 'TICKET');
+      // All 5 real Entity types (INVOICE/PAYMENT/EVENT/TICKET/DOCUMENT) have
+      // a configured prompt builder — use a nonexistent type to exercise
+      // this fallback path.
+      const { data, error } = await runStructuredExtraction('some text', 'UNKNOWN_TYPE');
       expect(data).toBeNull();
       expect(error).toMatch(/No extraction prompt configured/);
       expect(aiClient.generate).not.toHaveBeenCalled();

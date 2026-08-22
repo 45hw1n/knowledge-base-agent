@@ -113,11 +113,13 @@ describe('ai/orchestrator/index — extractAndPersistEntity', () => {
   });
 
   it('errors for a classified type with no repository configured yet', async () => {
+    // All 5 real Entity types now have a configured repository — use a
+    // nonexistent type to exercise this fallback path.
     runStructuredExtraction.mockResolvedValue({ data: { title: 'Login broken' }, error: null });
 
-    const result = await extractAndPersistEntity(emailDoc({ type: 'TICKET' }));
+    const result = await extractAndPersistEntity(emailDoc({ type: 'UNKNOWN_TYPE' }));
 
-    expect(result.error).toMatch(/No repository configured for type "TICKET"/);
+    expect(result.error).toMatch(/No repository configured for type "UNKNOWN_TYPE"/);
   });
 
   it('propagates a repository-level error (e.g. validation failure)', async () => {
