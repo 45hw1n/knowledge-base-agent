@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const PersonSchema = require('./schemas/PersonSchema');
 const ConversationMessageSchema = require('./schemas/ConversationMessageSchema');
+const { validateConversationMessage } = ConversationMessageSchema;
 
 /**
  * Ticket represents a support request/problem report — the entity the
@@ -214,6 +215,18 @@ function validateExtractedTicket(raw) {
     return { name: name || null, email: email || null };
   };
 
+  const conversation = Array.isArray(raw.conversation)
+    ? raw.conversation.reduce((acc, entry) => {
+        const { message, error: entryError } = validateConversationMessage(entry);
+        if (entryError) {
+          console.warn(`[Ticket] Dropping invalid conversation entry: ${entryError}`);
+          return acc;
+        }
+        acc.push(message);
+        return acc;
+      }, [])
+    : [];
+
   return {
     ticket: {
       ticketNumber: typeof raw.ticketNumber === 'string' ? raw.ticketNumber : null,
@@ -225,7 +238,7 @@ function validateExtractedTicket(raw) {
       dueDate: parseDate(raw.dueDate),
       assignee: null,
       requester: normalizePerson(raw.requester),
-      conversation: [],
+      conversation,
       parentTicketId: null,
       duplicateOfTicketId: null,
       sourceUrl,

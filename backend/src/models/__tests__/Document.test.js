@@ -158,7 +158,12 @@ describe('Document — attachments', () => {
       attachments: [{ attachmentId: 'att_123', fileName: 'acme-nda-2026.pdf' }],
     });
     expect(doc.validateSync()).toBeUndefined();
-    expect(doc.attachments[0].toObject()).toEqual({ attachmentId: 'att_123', fileName: 'acme-nda-2026.pdf' });
+    expect(doc.attachments[0].toObject()).toEqual({
+      attachmentId: 'att_123',
+      fileName: 'acme-nda-2026.pdf',
+      mimeType: null,
+      size: null,
+    });
   });
 
   it('accepts multiple attachments', () => {
@@ -187,11 +192,15 @@ describe('Document — attachments', () => {
     expect(attachmentSchema.path('filename')).toBeUndefined();
   });
 
-  it('attachment references carry no storage metadata (content lives on the physical file model)', () => {
+  it('attachment references carry no storage ownership fields (content lives on the physical file model)', () => {
+    // Revised: mimeType/size were added to AttachmentRefSchema (a
+    // conversation-attachment/download-endpoint need — see decisions.md) —
+    // these are lightweight, already-known-at-ingestion-time descriptive
+    // fields, not evidence of owning the file's bytes. storageKey (a real
+    // upload-storage concept, from the separate AttachmentSchema/
+    // attachmentService.js system) is still deliberately absent here.
     const attachmentSchema = Document.schema.path('attachments').schema;
     expect(attachmentSchema.path('storageKey')).toBeUndefined();
-    expect(attachmentSchema.path('mimeType')).toBeUndefined();
-    expect(attachmentSchema.path('size')).toBeUndefined();
   });
 });
 

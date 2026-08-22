@@ -132,6 +132,8 @@ describe('Invoice — conversation storage', () => {
     expect(invoice.conversation[0].attachments[0].toObject()).toEqual({
       attachmentId: 'att_1',
       fileName: 'invoice-INV-123.pdf',
+      mimeType: null,
+      size: null,
     });
   });
 
@@ -247,7 +249,9 @@ describe('validateConversationMessage', () => {
     expect(error).toBeNull();
     expect(message.messageId).toBe('msg_003');
     expect(message.timestamp).toBeInstanceOf(Date);
-    expect(message.attachments).toEqual([{ attachmentId: 'att_2', fileName: 'receipt.pdf' }]);
+    expect(message.attachments).toEqual([
+      { attachmentId: 'att_2', fileName: 'receipt.pdf', mimeType: null, size: null },
+    ]);
   });
 
   it('defaults to no attachments when none are given', () => {

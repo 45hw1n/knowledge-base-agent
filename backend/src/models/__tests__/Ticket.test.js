@@ -173,6 +173,8 @@ describe('Ticket — conversation with attachments (shared schema)', () => {
     expect(ticket.conversation[0].attachments[0].toObject()).toEqual({
       attachmentId: 'att_1',
       fileName: 'screenshot.png',
+      mimeType: null,
+      size: null,
     });
   });
 

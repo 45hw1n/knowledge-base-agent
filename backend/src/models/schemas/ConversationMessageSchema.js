@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const AttachmentRefSchema = require('./AttachmentRefSchema');
+const PersonSchema = require('./PersonSchema');
 
 /**
  * A single preserved message relevant to an entity's conversation (Invoice,
@@ -23,6 +24,12 @@ const ConversationMessageSchema = new mongoose.Schema(
     content: { type: String, required: true },
     timestamp: { type: Date, required: true },
     attachments: { type: [AttachmentRefSchema], default: [] },
+    // Who actually sent this specific message — distinct from `direction`,
+    // which only says SENT-vs-RECEIVED relative to the account owner. Never
+    // assumed: only populated when the source gives an actual name/email
+    // (e.g. the email's From header), same caution as Event.organizer/
+    // Document.issuer/Ticket.requester.
+    sender: { type: PersonSchema, default: null },
   },
   { _id: false }
 );
@@ -63,11 +70,24 @@ function validateConversationMessage(raw) {
   const attachments = Array.isArray(raw.attachments)
     ? raw.attachments
         .filter((a) => a && typeof a.attachmentId === 'string' && typeof a.fileName === 'string')
-        .map((a) => ({ attachmentId: a.attachmentId, fileName: a.fileName }))
+        .map((a) => ({
+          attachmentId: a.attachmentId,
+          fileName: a.fileName,
+          mimeType: typeof a.mimeType === 'string' ? a.mimeType : null,
+          size: typeof a.size === 'number' && Number.isFinite(a.size) ? a.size : null,
+        }))
     : [];
 
+  const sender = (() => {
+    if (!raw.sender || typeof raw.sender !== 'object') return null;
+    const name = typeof raw.sender.name === 'string' ? raw.sender.name.trim() : null;
+    const email = typeof raw.sender.email === 'string' ? raw.sender.email.trim().toLowerCase() : null;
+    if (!name && !email) return null;
+    return { name: name || null, email: email || null };
+  })();
+
   return {
-    message: { messageId, direction: raw.direction, content, timestamp, attachments },
+    message: { messageId, direction: raw.direction, content, timestamp, attachments, sender },
     error: null,
   };
 }

@@ -19,6 +19,14 @@ const AttachmentRefSchema = new mongoose.Schema(
   {
     attachmentId: { type: String, required: true },
     fileName: { type: String, required: true, trim: true },
+    // Optional — already captured at ingestion time
+    // (syncEmailsService.js#extractAttachmentRefs) but previously dropped
+    // wherever a raw attachment ref was mapped down to this shape. Lets a
+    // consumer (e.g. a conversation attachment badge) pick the right
+    // icon/preview and set a correct Content-Type on download without a
+    // second round-trip. Nullable so existing records stay valid.
+    mimeType: { type: String, default: null },
+    size: { type: Number, default: null },
   },
   { _id: false }
 );

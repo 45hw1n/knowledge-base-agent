@@ -164,6 +164,18 @@ function validateExtractedInvoice(raw) {
     return { name: name || null, email: email || null };
   };
 
+  const conversation = Array.isArray(raw.conversation)
+    ? raw.conversation.reduce((acc, entry) => {
+        const { message, error: entryError } = validateConversationMessage(entry);
+        if (entryError) {
+          console.warn(`[Invoice] Dropping invalid conversation entry: ${entryError}`);
+          return acc;
+        }
+        acc.push(message);
+        return acc;
+      }, [])
+    : [];
+
   return {
     invoice: {
       invoiceNumber: typeof raw.invoiceNumber === 'string' ? raw.invoiceNumber : null,
@@ -174,7 +186,7 @@ function validateExtractedInvoice(raw) {
       dueDate: parseDate(raw.dueDate),
       issuer: normalizePerson(raw.issuer),
       status,
-      conversation: [],
+      conversation,
       sourceUrl,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
