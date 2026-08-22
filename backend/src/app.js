@@ -6,6 +6,7 @@ const passport = require('passport');
 const authRoutes = require('./routes/auth');
 const webhookRoutes = require('./routes/webhook');
 const aiRoutes = require('./routes/aiRoutes');
+const attachmentRoutes = require('./routes/attachmentRoutes');
 
 const app = express();
 
@@ -107,6 +108,7 @@ if (process.env.SESSION_DEBUG === "true") {
 // REST Routes
 app.use('/auth', authRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/attachments', attachmentRoutes);
 
 app.get('/', (req, res) => {
   if (!req.user) return res.send('API is running...');
