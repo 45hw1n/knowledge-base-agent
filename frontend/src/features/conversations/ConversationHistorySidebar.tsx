@@ -33,11 +33,13 @@ export function ConversationHistorySidebar({
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const conversations = useConversationStore((s) => s.conversations);
-  const createConversation = useConversationStore((s) => s.createConversation);
 
+  // A conversation only exists once it has a first message (the backend's
+  // POST /api/conversations creates the row and the message together) —
+  // there's no "create an empty conversation" call anymore, so this just
+  // returns to the welcome screen, matching handleSelect(null).
   const handleNewConversation = () => {
-    const id = createConversation();
-    navigate(`/conversations/${id}`);
+    navigate("/conversations");
     onMobileOpenChange(false);
   };
 

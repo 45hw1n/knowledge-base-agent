@@ -5,7 +5,7 @@ import { Button } from "@/lib/ui/button";
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
 interface ChatComposerProps {
-  onSend: (content: string) => void;
+  onSend: (content: string) => void | Promise<void>;
 }
 
 /**
@@ -16,14 +16,28 @@ interface ChatComposerProps {
  */
 export function ChatComposer({ onSend }: ChatComposerProps) {
   const [value, setValue] = useState("");
+  const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSubmit = () => {
+  // Disabling while a send is in flight is the actual fix for double-submit
+  // (e.g. a double-click, or pressing Enter twice before the first request's
+  // conversation/message rows exist yet) — conversationId is server-
+  // generated, so two rapid submits would otherwise legitimately create two
+  // separate conversations rather than one. See decisions.md.
+  const handleSubmit = async () => {
     const trimmed = value.trim();
-    if (!trimmed) return;
-    onSend(trimmed);
+    if (!trimmed || sending) return;
     setValue("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+    setSending(true);
+    try {
+      await onSend(trimmed);
+    } catch (error) {
+      console.error("[ChatComposer] Failed to send message:", error);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -48,15 +62,16 @@ export function ChatComposer({ onSend }: ChatComposerProps) {
           value={value}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          disabled={sending}
           placeholder="Ask about your invoices, tickets, or anything else Cortex has extracted..."
           rows={1}
-          className="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
+          className="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
         />
         <Button
           size="icon"
           className="h-8 w-8 shrink-0 rounded-full"
           onClick={handleSubmit}
-          disabled={!value.trim()}
+          disabled={!value.trim() || sending}
         >
           <ArrowUp className="h-4 w-4" />
         </Button>
