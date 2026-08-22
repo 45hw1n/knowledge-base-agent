@@ -120,11 +120,11 @@ const resolvers = {
 
             const result = {
                 userId: appStatus.userId,
-                emailLastSyncedAt: appStatus.emailLastSyncedAt,
+                emailLastSyncedAt: appStatus.emailLastSyncedAt ? appStatus.emailLastSyncedAt.toISOString() : null,
                 emailSyncStatus: appStatus.emailSyncStatus || "IDLE",
                 emailProcessingInProgress: appStatus.emailProcessingInProgress || false,
-                lastEmailAIProcessStartedAt: appStatus.lastEmailAIProcessStartedAt || null,
-                lastEmailAIProcessCompletedAt: appStatus.lastEmailAIProcessCompletedAt || null,
+                lastEmailAIProcessStartedAt: appStatus.lastEmailAIProcessStartedAt ? appStatus.lastEmailAIProcessStartedAt.toISOString() : null,
+                lastEmailAIProcessCompletedAt: appStatus.lastEmailAIProcessCompletedAt ? appStatus.lastEmailAIProcessCompletedAt.toISOString() : null,
                 lastEmailAIProcessedCount: appStatus.lastEmailAIProcessedCount || 0
             };
             return result;
