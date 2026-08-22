@@ -3,8 +3,14 @@ import { gql, useMutation, useQuery } from "@apollo/client";
 import { Alert, AlertDescription, AlertTitle } from "@/lib/ui/alert";
 import { Button } from "@/lib/ui/button";
 import { GET_EMAILS_TO_PROCESS_BY_STATUS, PROCESS_EMAILS } from "@/graphql/query/emails/emailSyncQueries";
+import config from "@/lib/config";
 
 const PROCESSABLE_EMAIL_STATUSES = ["DETECTED", "LLM_ERROR", "RETRY_PENDING", "FAILED"] as const;
+
+// Manual processing is a dev/local convenience — production accounts get
+// processed automatically off the Gmail webhook (see backend
+// webhookController.js), so this card never needs to appear or poll there.
+const IS_PRODUCTION = !config.isLocal;
 
 const GET_APP_STATUS = gql`
   query GetAppStatus {
@@ -59,6 +65,7 @@ export function ProcessEmailAlert() {
         },
         fetchPolicy: "network-only",
         notifyOnNetworkStatusChange: true,
+        skip: IS_PRODUCTION,
       }
     );
 
@@ -69,6 +76,7 @@ export function ProcessEmailAlert() {
   const { data: appStatusData } = useQuery<GetAppStatusResponse>(GET_APP_STATUS, {
     pollInterval: isProcessing ? 3000 : 0,
     fetchPolicy: "network-only",
+    skip: IS_PRODUCTION,
   });
 
   const serverProcessing =
@@ -175,7 +183,7 @@ export function ProcessEmailAlert() {
     }
   }
 
-  if (!isVisible || loading) {
+  if (IS_PRODUCTION || !isVisible || loading) {
     return null;
   }
 

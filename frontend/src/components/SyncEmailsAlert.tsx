@@ -3,6 +3,12 @@ import { gql, useMutation, useQuery } from "@apollo/client";
 import { Alert, AlertDescription, AlertTitle } from "@/lib/ui/alert";
 import { Button } from "@/lib/ui/button";
 import { SYNC_EMAILS } from "@/graphql/query/emails/emailSyncQueries";
+import config from "@/lib/config";
+
+// Manual sync is a dev/local convenience — production accounts get synced
+// via the Gmail webhook (see backend webhookController.js), so this card
+// never needs to appear there.
+const IS_PRODUCTION = !config.isLocal;
 
 const GET_APP_STATUS = gql`
   query GetAppStatusForSync {
@@ -36,6 +42,7 @@ export function SyncEmailsAlert() {
   const { data: appStatusData } = useQuery<GetAppStatusResponse>(GET_APP_STATUS, {
     pollInterval: isSyncing ? 3000 : 0,
     fetchPolicy: "network-only",
+    skip: IS_PRODUCTION,
   });
 
   const [syncEmails] = useMutation<SyncEmailsResponse>(SYNC_EMAILS);
@@ -81,7 +88,7 @@ export function SyncEmailsAlert() {
     }
   }
 
-  if (!isVisible) {
+  if (IS_PRODUCTION || !isVisible) {
     return null;
   }
 
