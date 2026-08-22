@@ -1935,3 +1935,66 @@ and `$set` the corrected text onto the existing array element directly
 — this was a handful of test-session records, not a production data
 problem; a real fix-forward migration would only be worth building if this
 surfaces again against real user data.
+
+---
+
+## Phase 2 — Chat / Conversations
+
+### Decision: `/conversations` ships as a UI shell first — local-only state, no backend, no real AI reply
+
+**Alternatives considered:** Build the route with a real chat message model
+(Mongoose + GraphQL), wire it to `ai/client` for actual replies grounded in
+extracted entities (RAG-style), from the start.
+
+**Reasoning:** The request was explicitly about the *UX* — a Claude-Desktop
+-style three-pane layout (locked icon nav, conversation history sidebar,
+chat panel with pinned composer). Layout and interaction design is a
+separable concern from "what answers the user's question and how." Landing
+the shell first lets the layout be verified and iterated on its own, before
+any backend/RAG design work (which will need its own decisions: how to
+scope retrieval to a user's entities, how to stream a reply, whether to
+reuse `ai/client`) gets bolted on top of a still-moving UI.
+
+**What was built:** `store/conversationStore.ts` — a plain Zustand store
+(`conversations`, `createConversation()`, `addMessage()`), same
+`create<T>((set) => (...))` convention as `appStore.ts`. Messages typed as
+`{ role: 'user' | 'assistant' }` so the shape is ready for a real assistant
+reply later, but nothing fabricates one now — sending a message only ever
+appends a `user`-role entry.
+
+**Deliberately not built (explicit follow-up phase):** backend persistence
+for conversations/messages (no Mongoose model, no GraphQL type), the actual
+LLM/RAG call, multi-device sync. The store is local-only — a page reload or
+full navigation resets history, which is expected and accepted for this
+phase.
+
+### Decision: route-scoped sidebar lock via `SidebarProvider`'s existing controlled-prop escape hatch, not a change to the shared primitive
+
+**Alternatives considered:** Add a `forceCollapsed` prop to
+`lib/ui/sidebar.tsx` itself, or a global "chat mode" flag in `appStore.ts`.
+
+**Reasoning:** `SidebarProvider` (`lib/ui/sidebar.tsx`) already accepts
+controlled `open`/`onOpenChange` props and falls back to its own internal/
+localStorage-backed state when they're `undefined`. `AppLayout.tsx` just
+checks `pathname.startsWith("/conversations")` and passes `open={false}` +
+a no-op `onOpenChange` on that route only, `undefined`/`undefined`
+everywhere else. Zero changes to the shared sidebar primitive, and every
+other route's expand/collapse/persistence behavior is untouched — verified
+by visiting `/conversations` then `/home` and confirming the collapse
+trigger and Cmd+B still work normally on `/home`.
+
+**Second sidebar (conversation history) is a plain component, not built on
+the shadcn `Sidebar` primitives:** it doesn't need icon-rail/offcanvas
+collapse modes — just show/hide on mobile via local `useState`, styled to
+match (`bg-sidebar`, `border-r`). Reusing the shadcn `Sidebar` machinery for
+a panel that only ever needs one collapse behavior (full overlay on mobile,
+always-visible on desktop) would have been more indirection than the panel
+needs.
+
+**Verified in-browser (desktop + mobile):** desktop — locked icon rail,
+history sidebar, welcome state, message send/create-conversation flow,
+history list title/timestamp updates, `/home` unaffected. Mobile (resized
+viewport <768px, the same `useIsMobile()` breakpoint used elsewhere in this
+codebase) — history sidebar hidden by default, `ChatPanel`'s hamburger
+header bar opens it as a `fixed inset-0 z-30` overlay with a dismissible
+backdrop, composer stays pinned at the bottom with no page-level scroll.
