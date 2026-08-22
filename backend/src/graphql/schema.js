@@ -237,6 +237,8 @@ const typeDefs = gql`
   type AttachmentRef {
     attachmentId: String!
     fileName: String!
+    mimeType: String
+    size: Int
   }
 
   enum ConversationDirection {
@@ -250,6 +252,7 @@ const typeDefs = gql`
     content: String!
     timestamp: String!
     attachments: [AttachmentRef!]!
+    sender: Person
   }
 
   enum InvoiceStatus {
