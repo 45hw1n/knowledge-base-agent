@@ -2,6 +2,7 @@ const Ticket = require('../../../models/Ticket');
 const { validateExtractedTicket } = Ticket;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
 const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
+const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
  * Persists an extracted Ticket and its Entity row. Idempotent on
@@ -57,4 +58,48 @@ async function persistTicket({ userId, emailDoc, extracted, summary, aiModel = n
     return { ticket, entity, error: null };
 }
 
-module.exports = { persistTicket };
+/**
+ * Reads Tickets for the chat data-access layer. Never spreads `filters`
+ * into the Mongo query — only the specific, sanitized keys the chat
+ * orchestrator's filterSanitizers.js already validated are ever read here.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {{status?:string, urgency?:string, priority?:string, dateRange?:{from?:Date,to?:Date}, keyword?:string}} params.filters
+ * @returns {Promise<{ data: Array<object>|null, error: string|null }>}
+ */
+async function findTicketsByFilters({ userId, filters = {} }) {
+    try {
+        const query = { userId };
+        if (filters.status) query.status = filters.status;
+        if (filters.urgency) query.urgency = filters.urgency;
+        if (filters.priority) query.priority = filters.priority;
+        if (filters.dateRange) {
+            query.createdAt = {};
+            if (filters.dateRange.from) query.createdAt.$gte = filters.dateRange.from;
+            if (filters.dateRange.to) query.createdAt.$lte = filters.dateRange.to;
+        }
+        if (filters.keyword) {
+            query.title = { $regex: escapeRegExp(filters.keyword), $options: 'i' };
+        }
+
+        const tickets = await Ticket.find(query).sort({ createdAt: -1 }).limit(MAX_RESULTS).lean();
+        const data = await attachEntityMetadata({
+            userId,
+            type: 'TICKET',
+            docs: tickets,
+            mapFields: (ticket) => ({
+                status: ticket.status,
+                urgency: ticket.urgency,
+                priority: ticket.priority,
+                dueDate: ticket.dueDate,
+                sourceUrl: ticket.sourceUrl,
+            }),
+        });
+        return { data, error: null };
+    } catch (error) {
+        return { data: null, error: error.message };
+    }
+}
+
+module.exports = { persistTicket, findTicketsByFilters };

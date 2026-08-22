@@ -5,6 +5,7 @@ const { determineInvoiceStatus } = Invoice;
 const { findMatchingInvoice, determineLinkMethod } = require('../../../services/paymentReconciliationService');
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
 const { createEntityForTypedChild } = require('./entityRepository');
+const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 function buildPaymentTitle(payment) {
     const amount = payment.amount?.value;
@@ -124,4 +125,54 @@ async function persistPayment({ userId, emailDoc, extracted, summary, aiModel = 
     return { payment, entity, error: null };
 }
 
-module.exports = { persistPayment, buildPaymentTitle, autoLinkBySameThread };
+/**
+ * Reads Payments for the chat data-access layer. Payment has no `status`
+ * field at all (its settlement's success signal lives on the linked
+ * Invoice, not here — see Payment.js) — only `dateRange` (against `paidAt`,
+ * the date money actually moved) and `keyword` (against `payer.name`/
+ * `payee.name`, since Payment has no title-like text field of its own) are
+ * ever whitelisted for this data source. Never spreads `filters` into the
+ * Mongo query — only these specific, sanitized keys are read.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {{dateRange?:{from?:Date,to?:Date}, amountRange?:{min?:number,max?:number}, keyword?:string}} params.filters
+ * @returns {Promise<{ data: Array<object>|null, error: string|null }>}
+ */
+async function findPaymentsByFilters({ userId, filters = {} }) {
+    try {
+        const query = { userId };
+        if (filters.dateRange) {
+            query.paidAt = {};
+            if (filters.dateRange.from) query.paidAt.$gte = filters.dateRange.from;
+            if (filters.dateRange.to) query.paidAt.$lte = filters.dateRange.to;
+        }
+        if (filters.amountRange) {
+            query['amount.value'] = {};
+            if (filters.amountRange.min !== undefined) query['amount.value'].$gte = filters.amountRange.min;
+            if (filters.amountRange.max !== undefined) query['amount.value'].$lte = filters.amountRange.max;
+        }
+        if (filters.keyword) {
+            const pattern = { $regex: escapeRegExp(filters.keyword), $options: 'i' };
+            query.$or = [{ 'payer.name': pattern }, { 'payee.name': pattern }];
+        }
+
+        const payments = await Payment.find(query).sort({ paidAt: -1 }).limit(MAX_RESULTS).lean();
+        const data = await attachEntityMetadata({
+            userId,
+            type: 'PAYMENT',
+            docs: payments,
+            mapFields: (payment) => ({
+                amount: payment.amount,
+                paidAt: payment.paidAt,
+                invoiceId: payment.invoiceId,
+                sourceUrl: payment.sourceUrl,
+            }),
+        });
+        return { data, error: null };
+    } catch (error) {
+        return { data: null, error: error.message };
+    }
+}
+
+module.exports = { persistPayment, buildPaymentTitle, autoLinkBySameThread, findPaymentsByFilters };

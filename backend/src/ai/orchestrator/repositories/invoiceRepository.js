@@ -2,6 +2,7 @@ const Invoice = require('../../../models/Invoice');
 const { validateExtractedInvoice } = Invoice;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
 const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
+const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 function buildInvoiceTitle(invoice) {
     if (invoice.invoiceNumber) return `Invoice ${invoice.invoiceNumber}`;
@@ -67,4 +68,59 @@ async function persistInvoice({ userId, emailDoc, extracted, summary, aiModel = 
     return { invoice, entity, error: null };
 }
 
-module.exports = { persistInvoice, buildInvoiceTitle };
+/**
+ * Reads Invoices for the chat data-access layer. Never spreads `filters`
+ * into the Mongo query — only the specific, sanitized keys the chat
+ * orchestrator's filterSanitizers.js already validated are ever read here.
+ * Invoice has no `title` field of its own (that lives on Entity, set from
+ * buildInvoiceTitle at creation) — `keyword` matches against
+ * `invoiceNumber`/`issuer.name` instead.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {{status?:string, dateRange?:{from?:Date,to?:Date}, dueDateRange?:{from?:Date,to?:Date}, amountRange?:{min?:number,max?:number}, keyword?:string}} params.filters
+ * @returns {Promise<{ data: Array<object>|null, error: string|null }>}
+ */
+async function findInvoicesByFilters({ userId, filters = {} }) {
+    try {
+        const query = { userId };
+        if (filters.status) query.status = filters.status;
+        if (filters.dateRange) {
+            query.createdAt = {};
+            if (filters.dateRange.from) query.createdAt.$gte = filters.dateRange.from;
+            if (filters.dateRange.to) query.createdAt.$lte = filters.dateRange.to;
+        }
+        if (filters.dueDateRange) {
+            query.dueDate = {};
+            if (filters.dueDateRange.from) query.dueDate.$gte = filters.dueDateRange.from;
+            if (filters.dueDateRange.to) query.dueDate.$lte = filters.dueDateRange.to;
+        }
+        if (filters.amountRange) {
+            query['amount.value'] = {};
+            if (filters.amountRange.min !== undefined) query['amount.value'].$gte = filters.amountRange.min;
+            if (filters.amountRange.max !== undefined) query['amount.value'].$lte = filters.amountRange.max;
+        }
+        if (filters.keyword) {
+            const pattern = { $regex: escapeRegExp(filters.keyword), $options: 'i' };
+            query.$or = [{ invoiceNumber: pattern }, { 'issuer.name': pattern }];
+        }
+
+        const invoices = await Invoice.find(query).sort({ createdAt: -1 }).limit(MAX_RESULTS).lean();
+        const data = await attachEntityMetadata({
+            userId,
+            type: 'INVOICE',
+            docs: invoices,
+            mapFields: (invoice) => ({
+                status: invoice.status,
+                amount: invoice.amount,
+                dueDate: invoice.dueDate,
+                sourceUrl: invoice.sourceUrl,
+            }),
+        });
+        return { data, error: null };
+    } catch (error) {
+        return { data: null, error: error.message };
+    }
+}
+
+module.exports = { persistInvoice, buildInvoiceTitle, findInvoicesByFilters };

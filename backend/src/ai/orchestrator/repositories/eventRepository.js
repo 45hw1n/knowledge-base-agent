@@ -2,6 +2,7 @@ const Event = require('../../../models/Event');
 const { validateExtractedEvent } = Event;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
 const { createEntityForTypedChild } = require('./entityRepository');
+const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
  * Persists an extracted Event and its Entity row. Idempotent on
@@ -55,4 +56,51 @@ async function persistEvent({ userId, emailDoc, extracted, summary, aiModel = nu
     return { event, entity, error: null };
 }
 
-module.exports = { persistEvent };
+/**
+ * Reads Events for the chat data-access layer. Event has no `status` field
+ * (see Event.js) — only `dateRange` (against `startTime`) and `keyword`
+ * (against `title`/`organizer.name`/`attendees[].name`) are ever
+ * whitelisted for this data source. Never spreads `filters` into the Mongo
+ * query — only these specific, sanitized keys are read.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {{dateRange?:{from?:Date,to?:Date}, keyword?:string}} params.filters
+ * @returns {Promise<{ data: Array<object>|null, error: string|null }>}
+ */
+async function findEventsByFilters({ userId, filters = {} }) {
+    try {
+        const query = { userId };
+        if (filters.dateRange) {
+            query.startTime = {};
+            if (filters.dateRange.from) query.startTime.$gte = filters.dateRange.from;
+            if (filters.dateRange.to) query.startTime.$lte = filters.dateRange.to;
+        }
+        if (filters.keyword) {
+            const pattern = { $regex: escapeRegExp(filters.keyword), $options: 'i' };
+            query.$or = [
+                { title: pattern },
+                { 'organizer.name': pattern },
+                { attendees: { $elemMatch: { name: pattern } } },
+            ];
+        }
+
+        const events = await Event.find(query).sort({ startTime: -1 }).limit(MAX_RESULTS).lean();
+        const data = await attachEntityMetadata({
+            userId,
+            type: 'EVENT',
+            docs: events,
+            mapFields: (event) => ({
+                startTime: event.startTime,
+                endTime: event.endTime,
+                location: event.location,
+                sourceUrl: event.sourceUrl,
+            }),
+        });
+        return { data, error: null };
+    } catch (error) {
+        return { data: null, error: error.message };
+    }
+}
+
+module.exports = { persistEvent, findEventsByFilters };
