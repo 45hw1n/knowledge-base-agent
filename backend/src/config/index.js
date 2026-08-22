@@ -72,4 +72,17 @@ module.exports = {
     bucketName: process.env.R2_BUCKET_NAME,
     endpoint: r2Endpoint,
   },
+
+  // Chat feature. pollIntervalMs/maxPollAttempts describe the contract the
+  // frontend's short-polling loop follows (3s * 20 = 60s) — the frontend
+  // keeps its own copy of these two values (client-side setInterval timing
+  // must keep working even if a runtime config fetch failed), kept equal by
+  // convention/comment, not a shared runtime call. historyTurnLimit is the
+  // only one of the three actually enforced here, bounding how much
+  // conversation history is fetched into the orchestrator's prompt.
+  chat: {
+    pollIntervalMs: Number(process.env.CHAT_POLL_INTERVAL_MS) || 3000,
+    maxPollAttempts: Number(process.env.CHAT_MAX_POLL_ATTEMPTS) || 20,
+    historyTurnLimit: Number(process.env.CHAT_HISTORY_TURN_LIMIT) || 10,
+  },
 };
