@@ -59,21 +59,37 @@ async function processEmail(userId, messageId) {
             classification: { candidates },
         });
 
-        // Auto-process if enabled (fire-and-forget)
-        if (savedEmail?._id) {
-            const prefs = await UserPreferences.findOne({ userId });
-            if (prefs?.autoProcess) {
-                console.log(`[AutoProcess] Triggering for emailId=${savedEmail._id}`);
-                processEmails({ ids: [savedEmail._id.toString()], userId })
-                    .catch(err => console.error('[AutoProcess] Failed:', err.message));
-            }
-        }
-
-        return { status: 'processed', messageId };
+        // AutoProcess is triggered by the caller (syncRecentEmails/
+        // syncHistorySince/syncEmailsByLookback) once per sync call, batched
+        // across every email that call saved — not here, per-email. A burst
+        // of N emails in one sync would otherwise fire N separate, racing
+        // processEmails() calls instead of one coordinated cycle. See
+        // decisions.md.
+        return { status: 'processed', messageId, emailId: savedEmail?._id?.toString() ?? null };
     } catch (error) {
         console.error(`Error processing email ${messageId}:`, error);
         throw error;
     }
+}
+
+/**
+ * Fires one batched processEmails() call for every email a sync just saved,
+ * if the user has autoProcess enabled. Fire-and-forget — same reasoning as
+ * the previous per-email trigger, just coalesced to one call per sync
+ * instead of one per email.
+ *
+ * @param {string} userId
+ * @param {string[]} emailIds - non-null emailIds collected from processEmail() results
+ */
+async function triggerAutoProcessIfEnabled(userId, emailIds) {
+    if (emailIds.length === 0) return;
+
+    const prefs = await UserPreferences.findOne({ userId });
+    if (!prefs?.autoProcess) return;
+
+    console.log(`[AutoProcess] Triggering for ${emailIds.length} email(s)`);
+    processEmails({ ids: emailIds, userId })
+        .catch(err => console.error('[AutoProcess] Failed:', err.message));
 }
 
 /**
@@ -110,6 +126,7 @@ async function syncRecentEmails(userId) {
 
         let processedCount = 0;
         const failedMessageIds = [];
+        const newEmailIds = [];
 
         for (const messageRef of messages) {
             const priorFailures = syncFailures instanceof Map
@@ -125,7 +142,8 @@ async function syncRecentEmails(userId) {
             }
 
             try {
-                await processEmail(userId, messageRef.id);
+                const result = await processEmail(userId, messageRef.id);
+                if (result.emailId) newEmailIds.push(result.emailId);
                 processedCount++;
             } catch (error) {
                 // A single broken message must not abort the whole sync — that
@@ -137,6 +155,8 @@ async function syncRecentEmails(userId) {
                 failedMessageIds.push(messageRef.id);
             }
         }
+
+        await triggerAutoProcessIfEnabled(userId, newEmailIds);
 
         // Only advance the cursor past this window once every message in it
         // has either succeeded or been confirmed poison — otherwise a
@@ -286,6 +306,7 @@ async function syncHistorySince(userId, startHistoryId, syncFailures = new Map()
 
         let processedCount = 0;
         const failedMessageIds = [];
+        const newEmailIds = [];
 
         for (const messageId of messageIdsToProcess) {
             // -- Poison-pill guard: skip permanently broken emails --
@@ -312,7 +333,8 @@ async function syncHistorySince(userId, startHistoryId, syncFailures = new Map()
                     continue;
                 }
 
-                await processEmail(userId, messageId);
+                const result = await processEmail(userId, messageId);
+                if (result.emailId) newEmailIds.push(result.emailId);
                 processedCount++;
             } catch (error) {
                 // Collect failure — do NOT swallow silently.
@@ -321,6 +343,8 @@ async function syncHistorySince(userId, startHistoryId, syncFailures = new Map()
                 failedMessageIds.push(messageId);
             }
         }
+
+        await triggerAutoProcessIfEnabled(userId, newEmailIds);
 
         if (failedMessageIds.length > 0) {
             console.warn(
@@ -361,6 +385,7 @@ async function syncEmailsByLookback(userId, sinceDate) {
 
         let processedCount = 0;
         const failedMessageIds = [];
+        const newEmailIds = [];
 
         for (const messageRef of allMessages) {
             const priorFailures = syncFailures instanceof Map
@@ -380,7 +405,8 @@ async function syncEmailsByLookback(userId, sinceDate) {
 
                 if (exists) continue;
 
-                await processEmail(userId, messageRef.id);
+                const result = await processEmail(userId, messageRef.id);
+                if (result.emailId) newEmailIds.push(result.emailId);
                 processedCount++;
 
             } catch (error) {
@@ -392,6 +418,8 @@ async function syncEmailsByLookback(userId, sinceDate) {
                 failedMessageIds.push(messageRef.id);
             }
         }
+
+        await triggerAutoProcessIfEnabled(userId, newEmailIds);
 
         // Only advance the cursor once every message in this window has
         // either succeeded or been confirmed poison (see syncFailureTracker).

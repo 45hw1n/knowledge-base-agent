@@ -1,5 +1,10 @@
 jest.mock('../gmailService', () => ({
   fetchMessage: jest.fn(),
+  listMessages: jest.fn(),
+}));
+
+jest.mock('../../models/AppStatus', () => ({
+  findOne: jest.fn(),
 }));
 
 jest.mock('../../models/EmailToProcess', () => {
@@ -39,9 +44,10 @@ jest.mock('../emailProcessorService', () => ({
 const gmailService = require('../gmailService');
 const EmailToProcess = require('../../models/EmailToProcess');
 const UserPreferences = require('../../models/UserPreferences');
+const AppStatus = require('../../models/AppStatus');
 const { extractEmailSnapshot } = require('../../utils/helpers');
 const { processEmails } = require('../emailProcessorService');
-const { processEmail } = require('../syncEmailsService');
+const { processEmail, syncRecentEmails } = require('../syncEmailsService');
 
 function buildGmailMessage({ id, threadId, subject, from }) {
   return {
@@ -74,7 +80,7 @@ describe('processEmail — classifier ingestion gate', () => {
     jest.clearAllMocks();
   });
 
-  it('persists an eligible email with the classifier candidates attached, and triggers autoProcess', async () => {
+  it('persists an eligible email with the classifier candidates attached, returning its saved emailId', async () => {
     const subject = 'Invoice #1234 due';
     const from = 'billing@vendor.com';
     const bodyText = 'Amount due: $500.00. Please pay by the due date.';
@@ -83,20 +89,22 @@ describe('processEmail — classifier ingestion gate', () => {
       buildGmailMessage({ id: 'msg-invoice-1', threadId: 'thread-1', subject, from })
     );
     mockSnapshot({ subject, from, bodyText, threadId: 'thread-1' });
-    UserPreferences.findOne.mockResolvedValue({ autoProcess: true });
 
     const result = await processEmail('user-1', 'msg-invoice-1');
 
-    expect(result).toEqual({ status: 'processed', messageId: 'msg-invoice-1' });
+    // autoProcess triggering is now the sync-loop caller's job (batched
+    // across the whole call — see syncRecentEmails tests below), not
+    // processEmail's — so no UserPreferences/processEmails calls here.
+    expect(result).toEqual({ status: 'processed', messageId: 'msg-invoice-1', emailId: 'saved-email-id' });
     expect(EmailToProcess).toHaveBeenCalledTimes(1);
+    expect(UserPreferences.findOne).not.toHaveBeenCalled();
+    expect(processEmails).not.toHaveBeenCalled();
 
     const [savedDoc] = EmailToProcess.mock.calls[0];
     expect(savedDoc.messageId).toBe('msg-invoice-1');
     expect(savedDoc.classification.candidates.length).toBeGreaterThan(0);
     expect(savedDoc.classification.candidates[0].type).toBe('INVOICE');
     expect(savedDoc.classification.candidates[0].score).toBeGreaterThan(0);
-
-    expect(processEmails).toHaveBeenCalledWith({ ids: ['saved-email-id'], userId: 'user-1' });
   });
 
   it('discards an email that matches no classifier rule set, without persisting or auto-processing it', async () => {
@@ -114,6 +122,56 @@ describe('processEmail — classifier ingestion gate', () => {
     expect(result).toEqual({ status: 'discarded', messageId: 'msg-newsletter-1' });
     expect(EmailToProcess).not.toHaveBeenCalled();
     expect(UserPreferences.findOne).not.toHaveBeenCalled();
+    expect(processEmails).not.toHaveBeenCalled();
+  });
+});
+
+describe('syncRecentEmails — autoProcess batching', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AppStatus.findOne.mockResolvedValue(null);
+  });
+
+  it('batches every eligible email from one sync call into a single processEmails() call, not one per email', async () => {
+    const subject = 'Invoice due';
+    const from = 'billing@vendor.com';
+    const bodyText = 'Amount due: $500.00. Please pay by the due date.';
+
+    gmailService.listMessages.mockResolvedValue([
+      { id: 'msg-invoice-1' },
+      { id: 'msg-invoice-2' },
+    ]);
+    gmailService.fetchMessage.mockImplementation((_userId, messageId) =>
+      Promise.resolve(buildGmailMessage({ id: messageId, threadId: 'thread-1', subject, from }))
+    );
+    mockSnapshot({ subject, from, bodyText, threadId: 'thread-1' });
+    UserPreferences.findOne.mockResolvedValue({ autoProcess: true });
+
+    await syncRecentEmails('user-1');
+
+    expect(EmailToProcess).toHaveBeenCalledTimes(2);
+    // One coordinated call for the whole batch, not two racing ones.
+    expect(processEmails).toHaveBeenCalledTimes(1);
+    expect(processEmails).toHaveBeenCalledWith({
+      ids: ['saved-email-id', 'saved-email-id'],
+      userId: 'user-1',
+    });
+  });
+
+  it('does not call processEmails when autoProcess is disabled', async () => {
+    const subject = 'Invoice due';
+    const from = 'billing@vendor.com';
+    const bodyText = 'Amount due: $500.00. Please pay by the due date.';
+
+    gmailService.listMessages.mockResolvedValue([{ id: 'msg-invoice-1' }]);
+    gmailService.fetchMessage.mockResolvedValue(
+      buildGmailMessage({ id: 'msg-invoice-1', threadId: 'thread-1', subject, from })
+    );
+    mockSnapshot({ subject, from, bodyText, threadId: 'thread-1' });
+    UserPreferences.findOne.mockResolvedValue({ autoProcess: false });
+
+    await syncRecentEmails('user-1');
+
     expect(processEmails).not.toHaveBeenCalled();
   });
 });
