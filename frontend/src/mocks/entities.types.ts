@@ -26,6 +26,8 @@ export interface Money {
 export interface AttachmentRef {
   attachmentId: string;
   fileName: string;
+  mimeType: string | null;
+  size: number | null;
 }
 
 export type ConversationDirection = 'SENT' | 'RECEIVED';
@@ -36,6 +38,7 @@ export interface ConversationMessage {
   content: string;
   timestamp: string;
   attachments: AttachmentRef[];
+  sender: Person | null;
 }
 
 export type SourceType = 'EMAIL' | 'DOCUMENT';

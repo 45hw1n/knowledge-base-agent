@@ -46,9 +46,12 @@ const CONVERSATION_FIELDS = `
   direction
   content
   timestamp
+  sender { ${PERSON_FIELDS} }
   attachments {
     attachmentId
     fileName
+    mimeType
+    size
   }
 `;
 
