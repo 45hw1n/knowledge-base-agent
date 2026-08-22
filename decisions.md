@@ -1745,3 +1745,193 @@ login case race-free by construction rather than by coincidence of timing.
   webhook-ingested email that fails extraction in production is currently
   invisible and unretryable by any user action. Flagged as a real gap
   opened by the dev-only gating decision, not closed by this phase.
+
+---
+
+## Conversations: Attachments, Reply Reconciliation, and Why We Never Send
+
+Populates `Ticket`/`Invoice.conversation[]` for real (previously always `[]`
+— see the schema-plan discussion above) and builds the UI that renders it.
+Three separate decisions worth recording on their own, since each has a
+real alternative that was deliberately rejected.
+
+### Decision: conversation attachments are a live Gmail proxy, never stored by Cortex
+
+**Context:** the obvious-looking shortcut — "store the attachment's URL,
+clicking downloads it" — doesn't actually work. Gmail exposes no public,
+directly-fetchable URL for an attachment; the only way to get the bytes is
+the authenticated `gmail.users.messages.attachments.get` API call, scoped to
+that specific mailbox owner's OAuth token (`gmailService.js#fetchAttachment`,
+already used once for Document Processor OCR — see "The Real AI
+Orchestrator" section above).
+
+**Decision:** `AttachmentRefSchema` gained optional `mimeType`/`size` (already
+captured at ingestion by `syncEmailsService.js#extractAttachmentRefs`, just
+previously dropped) so the UI can show a correct icon/size without a second
+round-trip. A new REST route, `GET /api/attachments/gmail/:messageId/:attachmentId`
+(`routes/attachmentRoutes.js`, mounted alongside `authRoutes`/`aiRoutes` —
+after session/passport middleware, so `req.isAuthenticated()`/`req.user`
+work), calls `gmailService.fetchAttachment` fresh **on every request** and
+streams the bytes straight through with a `Content-Disposition: attachment`
+header. Nothing is ever written to R2/S3/disk — no storage system was added
+for this at all.
+
+**Ownership check is against the durable typed-child record, not the TTL'd
+one:** the route verifies the requesting user actually owns this
+`messageId`/`attachmentId` pair by querying `Invoice`/`Ticket.conversation[]`
+directly (`findOwnedAttachmentMeta`) rather than `EmailToProcess` — the
+latter expires on a 30-day TTL (see the Entity Model section's "durable
+source of truth" precedent), while attachment metadata was copied onto the
+typed child's `conversation[]` entry at creation time specifically so it
+survives that expiry. Using `EmailToProcess` here would have quietly broken
+attachment downloads on any ticket older than 30 days.
+
+**Reversed an explicit prior invariant, flagged rather than silently
+overridden:** `Document.test.js` had a test asserting `AttachmentRefSchema`
+"carries no storage metadata (content lives on the physical file model)" —
+written when a fuller R2-backed attachment record was assumed to eventually
+own that metadata. That system (`services/attachments/entityHandlers/`) is,
+and remains, entirely `NOT_IMPLEMENTED` stubs for every entity type that
+matters here — email attachments were never going to flow through it. The
+test was updated (not deleted) to assert the real remaining boundary:
+`storageKey` (an actual upload-ownership concept) is still absent;
+`mimeType`/`size` are lightweight, already-known-at-ingestion descriptive
+fields, not evidence of owning the file's bytes.
+
+### Decision: a reply is matched to an existing conversation by `threadId`, checked *before* classification
+
+**Context:** discovered by testing, not assumed — a real reply ("Thanks, it
+is working now.") sent to an existing Ticket's thread has zero
+problem/request-language signal, so `classifyEmail()` alone would discard it
+before it ever reached the database. The classifier-first design (Phase 1's
+founding decision, top of this document) is right for *new* emails, but
+wrong for a reply on a thread Cortex already has an opinion about.
+
+**Decision:** `services/conversationService.js#findExistingConversationEntity`
+checks `Invoice.findOne({userId, threadId})` then `Ticket.findOne(...)` —
+the "cheap, deterministic half" of reconciliation this document has pointed
+at since the Invoice/Payment phase's Scenario 4 walkthrough, now actually
+built for Ticket/Invoice replies specifically. `syncEmailsService.js#processEmail()`
+runs this check immediately after `extractEmailSnapshot()`, **before**
+`classifyEmail()` — a match short-circuits the entire classify/save/extract
+path and instead builds a `ConversationMessage` (sender parsed from the raw
+`From` header, direction derived by comparing it against the account
+owner's own email — same rule as the creation-time path) and `$push`es it
+onto the existing record. `buildConversationMessage()` (the sender/direction/
+validation logic) is shared between this path and
+`entityRepository.js#buildInitialConversationMessage` (the *first* message,
+seeded at creation) — extracted into `conversationService.js` specifically
+so that logic lives in exactly one place regardless of when in the pipeline
+it runs.
+
+**No AI relevance judgment — every reply on a matching thread is captured,
+full stop.** Scenario 4's original framing split this into two judgments:
+"is this reply meaningfully relevant" (assigned to the LLM) and "which
+invoice does it settle" (deterministic matching, built). This phase only
+builds the deterministic half and skips the relevance judgment entirely —
+a "have a great day" reply on a Ticket's thread gets appended exactly the
+same as "it's resolved now, thanks." This is a **deliberate simplification,
+not an oversight**: matches the requesting instruction directly, and adding
+an LLM relevance call here would be exactly the kind of speculative
+AI-extraction work this document has repeatedly deferred until a concrete
+need shows up. Revisit if noise in practice turns out to matter.
+
+**Idempotent against duplicate delivery, same pattern as everywhere else in
+this codebase:** `appendConversationMessage()`'s update filter,
+`{_id, 'conversation.messageId': {$ne: message.messageId}}`, means a
+duplicate webhook delivery or retried sync for the same reply is a no-op
+(`modifiedCount: 0`) rather than a second, duplicate bubble — the same
+"unique constraint over a second write, not an application-level guard"
+philosophy as `EmailToProcess.messageId`'s unique index and
+`Entity.entityId`'s unique+sparse index.
+
+**Deliberately not built:** a reply that *doesn't* match any existing
+thread still goes through the full classify/extract path as before (it
+could be the start of a brand-new Ticket/Invoice) — this phase only adds
+the short-circuit for the "already have an opinion about this thread" case.
+
+### Decision: Cortex never sends a reply — deliberately, not as a missing feature
+
+**The question this closes:** now that Cortex can *display* a full
+back-and-forth conversation convincingly enough to look like a real inbox
+view, the natural next ask is "let me reply from here" — a compose box
+under the conversation thread, wired to Gmail's `messages.send` API.
+
+**Decision: not building it, now or as an implied next step.** Cortex is
+explicitly a read-only observer of a mailbox it doesn't own the
+conversation in — it captures what already happened (sync from Gmail),
+never originates what happens next. Adding send capability would make
+Cortex a **second channel** through which a reply to a customer/vendor
+could originate, alongside the user's actual email client (Gmail web,
+Outlook, mobile Mail app, whatever they actually use day to day) — the
+exact dual-channel-communication problem this system is deliberately
+avoiding: two places a reply could come from means two places to check for
+"did I already answer this," a real risk of the same question getting two
+different answers, and Cortex silently drifting out of sync with whatever
+the user's actual email client shows the moment they reply from there
+instead (which, being their real inbox, they always can).
+
+**What this means concretely:** `ConversationMessage.direction` (`SENT`/
+`RECEIVED`) will keep showing a user's own past replies — captured
+passively via the same thread-reconciliation sync path as any other reply,
+exactly like the "Me <...>" `SENT` case already covered above — but there
+is no code path anywhere in this system, and none planned, that originates
+a new outgoing message. The `Conversations` component's attachment
+badges/links are read-only for the same reason: view and download, never
+compose or send.
+
+---
+
+## Bug: quoted reply chains weren't being stripped from conversation content
+
+**How this surfaced:** discovered by actually reading real conversation
+content, not by inspection — the reconciliation work above was the first
+time raw `cleanText` became something a human reads verbatim in the UI.
+`cleanText` already ran through `email-reply-parser` specifically to strip
+quoted history; a live reply still showed the entire quoted thread beneath
+it anyway.
+
+**Root cause, confirmed by reproducing it directly against the real Gmail
+bytes, not guessed:** `utils/helpers.js#extractEmailSnapshot` decided
+whether to run a body through `html-to-text`'s `convert()` by content-
+sniffing with `/<[a-z][\s\S]*>/i` — meant to detect an actual HTML body, but
+it also matches a plain-text quote header's bare angle-bracketed address
+(`"...Ashwin S <s.ashwin.0411@gmail.com> wrote:"` reads exactly like an
+opening HTML tag to that regex). A genuinely plain-text reply would
+therefore get wrongly converted anyway. `convert()`, given non-HTML input,
+collapses every line break into a single space — and `email-reply-parser`'s
+quote-boundary detection depends entirely on line boundaries to find where
+"On ... wrote:" starts. Flatten the text first and the parser has nothing
+left to find; it returns the whole thing, quote included.
+
+**Fix:** `extractBody()` now returns `{ text, mimeType }` instead of a bare
+string, so the caller knows definitively which MIME part it actually pulled
+from. `convert()` only ever runs when `mimeType === 'text/html'` — content-
+sniffing was removed entirely rather than tightened, since any regex
+guessing "is this HTML" from text alone has the same false-positive shape
+(a bare `<anything-that-looks-like-a-tag>` substring) for some input.
+
+**Not covered by an automated test, same pre-existing gap as before this
+fix:** `decisions.md`'s idempotency-hardening phase already flagged that
+`extractEmailSnapshot` can't be unit-tested under this project's plain Jest
+config (`import('email-reply-parser')` is a dynamic ESM import Jest isn't
+configured for). `extractBody` is a closure inside that same function, not
+separately exported, so this fix couldn't add coverage either — verified
+instead by re-running the *real* fetch-message → extractEmailSnapshot path
+against the actual Gmail message that exposed the bug and confirming the
+quote no longer survives.
+
+**Already-persisted bad data was hand-repaired, not left to a future
+re-sync:** the two conversation entries captured before this fix shipped
+already had the bad, quote-included content baked into
+`Ticket.conversation[]`. A plain re-sync would **not** have fixed them —
+`appendConversationMessage()`'s idempotency guard
+(`'conversation.messageId': {$ne: ...}`) exists specifically to skip a
+message that's already present, so it would have silently left the old bad
+content in place forever. Ran a one-off script instead: re-fetch each
+affected message from Gmail, re-run the now-fixed `extractEmailSnapshot`,
+and `$set` the corrected text onto the existing array element directly
+(`'conversation.$.content'`). Not turned into a migration/backend endpoint
+— this was a handful of test-session records, not a production data
+problem; a real fix-forward migration would only be worth building if this
+surfaces again against real user data.
