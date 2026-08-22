@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom";
 import { AppSettings } from "@/components/AppSettings";
 import { AppSidebar } from "@/components/app-sidebar";
+import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { PageShell } from "@/components/page-layout";
 import { PageHeaderTitle } from "@/components/page-header-title";
 import {
@@ -20,7 +21,11 @@ export default function AppLayout() {
           <SidebarCollapseTrigger className="hidden md:flex" />
           <div className="h-4 w-px bg-border" />
           <PageHeaderTitle />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-4">
+            {/* Mobile gets this in the side drawer instead — see AppSidebar. */}
+            <div className="hidden md:block">
+              <LastSyncedAt />
+            </div>
             <AppSettings />
           </div>
         </header>

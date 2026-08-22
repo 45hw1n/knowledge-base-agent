@@ -31,3 +31,14 @@ export const PROCESS_EMAILS = gql`
     }
   }
 `;
+
+export const GET_SYNC_STATUS = gql`
+  query GetSyncStatus {
+    getAppStatus {
+      emailSyncStatus
+      emailProcessingInProgress
+      emailLastSyncedAt
+      lastEmailAIProcessedCount
+    }
+  }
+`;

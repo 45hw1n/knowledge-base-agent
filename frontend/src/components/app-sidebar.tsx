@@ -2,7 +2,9 @@ import { useMutation } from "@apollo/client";
 import { Home, LogOut, Settings } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import CortexLogo from "@/assets/cortex-logo.svg";
+import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { LOGOUT } from "@/graphql/query/auth/authQueries";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { apolloClient } from "@/lib/apollo";
 import {
   Sidebar,
@@ -56,6 +58,7 @@ function clearCookies() {
 
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const isMobile = useIsMobile();
 
   const [logout, { loading }] = useMutation(LOGOUT, {
     onCompleted: async () => {
@@ -124,6 +127,12 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border/70 p-2 group-data-[collapsible=icon]:px-0">
+        {/* Desktop gets this in the top header instead — see AppLayout. */}
+        {isMobile && (
+          <div className="px-2 pb-2">
+            <LastSyncedAt />
+          </div>
+        )}
         <SidebarMenu className="group-data-[collapsible=icon]:items-center">
           <SidebarMenuItem>
             <SidebarMenuButton
