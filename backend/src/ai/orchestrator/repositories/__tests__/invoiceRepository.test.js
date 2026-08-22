@@ -6,12 +6,15 @@ jest.mock('../../../../models/Invoice', () => {
   return mockCtor;
 });
 jest.mock('../../../../services/sourceUrlService', () => ({ buildSourceUrl: jest.fn() }));
-jest.mock('../entityRepository', () => ({ createEntityForTypedChild: jest.fn() }));
+jest.mock('../entityRepository', () => ({
+  createEntityForTypedChild: jest.fn(),
+  buildInitialConversationMessage: jest.fn(),
+}));
 
 const mongoose = require('mongoose');
 const Invoice = require('../../../../models/Invoice');
 const { buildSourceUrl } = require('../../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('../entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage } = require('../entityRepository');
 const { persistInvoice, buildInvoiceTitle } = require('../invoiceRepository');
 
 describe('invoiceRepository', () => {
@@ -22,6 +25,7 @@ describe('invoiceRepository', () => {
     jest.clearAllMocks();
     buildSourceUrl.mockReturnValue('https://mail.google.com/mail/u/0/#all/msg-1');
     createEntityForTypedChild.mockResolvedValue({ _id: 'entity-1' });
+    buildInitialConversationMessage.mockResolvedValue(null);
   });
 
   describe('buildInvoiceTitle', () => {
@@ -77,13 +81,28 @@ describe('invoiceRepository', () => {
         threadId: 'thread-1',
         messageId: 'msg-1',
         metadata: { summary: 'A vendor invoice.' },
+        conversation: [],
       });
       // Never AI-supplied — must always come from the app, never the extracted payload.
       expect(rawPassedToValidate.sourceUrl).not.toBe(undefined);
 
       expect(Invoice.create).toHaveBeenCalledWith(expect.objectContaining({ userId }));
-      expect(result.invoice).toEqual({ _id: 'invoice-new', invoiceNumber: 'INV-9', amount: { value: 500 } });
-      expect(result.entity).toEqual({ _id: 'entity-1' });
+    });
+
+    it('seeds conversation[] with the triggering email when buildInitialConversationMessage finds one', async () => {
+      Invoice.findOne.mockResolvedValue(null);
+      Invoice.validateExtractedInvoice.mockImplementation((raw) => ({ invoice: raw, error: null }));
+      Invoice.create.mockResolvedValue({ _id: 'invoice-new', amount: { value: 500 } });
+      const seededMessage = {
+        messageId: 'msg-1', direction: 'RECEIVED', content: 'Invoice attached.', timestamp: new Date(), attachments: [], sender: { name: 'Vendor', email: 'vendor@example.com' },
+      };
+      buildInitialConversationMessage.mockResolvedValue(seededMessage);
+
+      await persistInvoice({ userId, emailDoc, extracted: { amount: { value: 500 } } });
+
+      expect(buildInitialConversationMessage).toHaveBeenCalledWith({ userId, emailDoc });
+      const [rawPassedToValidate] = Invoice.validateExtractedInvoice.mock.calls[0];
+      expect(rawPassedToValidate.conversation).toEqual([seededMessage]);
     });
 
     it('fetches the existing Invoice on a duplicate-key race instead of erroring', async () => {

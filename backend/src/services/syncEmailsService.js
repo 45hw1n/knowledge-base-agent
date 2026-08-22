@@ -9,6 +9,7 @@ const { updateAppStatus } = require('../controllers/updateAppStatusController');
 const { reconcileSyncFailures } = require('./syncFailureTracker');
 const { processEmails } = require('./emailProcessorService');
 const { classifyEmail } = require('../classifier');
+const { findExistingConversationEntity, buildConversationMessage, appendConversationMessage } = require('./conversationService');
 
 /**
  * Process a single email message
@@ -34,6 +35,43 @@ async function processEmail(userId, messageId) {
 
         const { metadata, encryptedCleanText, cleanText, bodyHash, snippet, threadId } =
             await extractEmailSnapshot(emailData);
+
+        // Reply-to-an-existing-conversation check — runs BEFORE
+        // classification so a reply with no classifier signal of its own
+        // (e.g. "thanks, this is resolved now") still gets captured, as
+        // long as it's on a thread Cortex already has an Invoice/Ticket
+        // for. This is the "cheap, deterministic half" of Scenario 4 (see
+        // decisions.md) — matching by threadId, no AI relevance judgment:
+        // every reply on a matching thread is treated as relevant. That's a
+        // documented simplification, not an oversight.
+        const existingEntity = await findExistingConversationEntity({ userId, threadId });
+        if (existingEntity) {
+            const { message, error: conversationError } = await buildConversationMessage({
+                userId,
+                messageId,
+                fromHeader: from,
+                bodyText: cleanText,
+                date,
+                attachments,
+            });
+
+            if (conversationError) {
+                console.warn(`[Conversation] messageId=${messageId} matched thread ${threadId} but couldn't be recorded: ${conversationError}`);
+                return { status: 'discarded', messageId };
+            }
+
+            const appended = await appendConversationMessage({ type: existingEntity.type, doc: existingEntity.doc, message });
+            console.log(
+                `[Conversation] messageId=${messageId} ${appended ? 'appended to' : 'already present on'} ` +
+                `${existingEntity.type} ${existingEntity.doc._id} (thread ${threadId})`
+            );
+            return {
+                status: 'appended_to_conversation',
+                messageId,
+                entityType: existingEntity.type,
+                entityId: existingEntity.doc._id.toString(),
+            };
+        }
 
         // Only emails the classifier recognizes as a plausible knowledge-base
         // entity (an invoice, ticket, payment, event, or document signal) are

@@ -7,6 +7,12 @@ jest.mock('../../models/AppStatus', () => ({
   findOne: jest.fn(),
 }));
 
+// Used by conversationService.js's thread-reconciliation check, which now
+// runs on every processEmail() call before classification.
+jest.mock('../../models/Invoice', () => ({ findOne: jest.fn() }));
+jest.mock('../../models/Ticket', () => ({ findOne: jest.fn(), updateOne: jest.fn() }));
+jest.mock('../../models/User', () => ({ findById: jest.fn() }));
+
 jest.mock('../../models/EmailToProcess', () => {
   return jest.fn().mockImplementation(function (doc) {
     Object.assign(this, doc);
@@ -45,6 +51,8 @@ const gmailService = require('../gmailService');
 const EmailToProcess = require('../../models/EmailToProcess');
 const UserPreferences = require('../../models/UserPreferences');
 const AppStatus = require('../../models/AppStatus');
+const Invoice = require('../../models/Invoice');
+const Ticket = require('../../models/Ticket');
 const { extractEmailSnapshot } = require('../../utils/helpers');
 const { processEmails } = require('../emailProcessorService');
 const { processEmail, syncRecentEmails } = require('../syncEmailsService');
@@ -78,6 +86,10 @@ function mockSnapshot({ subject, from, bodyText, threadId }) {
 describe('processEmail — classifier ingestion gate', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // No existing Invoice/Ticket on this thread by default — the
+    // reconciliation check falls through to the normal classify/save path.
+    Invoice.findOne.mockResolvedValue(null);
+    Ticket.findOne.mockResolvedValue(null);
   });
 
   it('persists an eligible email with the classifier candidates attached, returning its saved emailId', async () => {
@@ -124,12 +136,48 @@ describe('processEmail — classifier ingestion gate', () => {
     expect(UserPreferences.findOne).not.toHaveBeenCalled();
     expect(processEmails).not.toHaveBeenCalled();
   });
+
+  it('appends a reply to an existing Ticket\'s conversation[] instead of classifying it as a new entity — even with zero classifier signal', async () => {
+    const User = require('../../models/User');
+    User.findById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ email: 'me@mycompany.com' }) }) });
+
+    const subject = 'Re: Unable to connect to VPN';
+    const from = 'customer@example.com';
+    // Deliberately no problem/request language — this reply would match no
+    // classifier rule on its own, yet must still be captured because it's
+    // on a thread Cortex already has a Ticket for.
+    const bodyText = 'Thanks, it is working now.';
+
+    gmailService.fetchMessage.mockResolvedValue(
+      buildGmailMessage({ id: 'msg-reply-1', threadId: 'thread-vpn', subject, from })
+    );
+    mockSnapshot({ subject, from, bodyText, threadId: 'thread-vpn' });
+
+    const existingTicket = { _id: 'ticket-1' };
+    Ticket.findOne.mockResolvedValue(existingTicket);
+    Ticket.updateOne.mockResolvedValue({ modifiedCount: 1 });
+
+    const result = await processEmail('user-1', 'msg-reply-1');
+
+    expect(result).toEqual({
+      status: 'appended_to_conversation', messageId: 'msg-reply-1', entityType: 'TICKET', entityId: 'ticket-1',
+    });
+    expect(Ticket.updateOne).toHaveBeenCalledWith(
+      { _id: 'ticket-1', 'conversation.messageId': { $ne: 'msg-reply-1' } },
+      { $push: { conversation: expect.objectContaining({ content: bodyText, direction: 'RECEIVED' }) } }
+    );
+    // Never reaches classification/persistence — it was already handled.
+    expect(EmailToProcess).not.toHaveBeenCalled();
+    expect(processEmails).not.toHaveBeenCalled();
+  });
 });
 
 describe('syncRecentEmails — autoProcess batching', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     AppStatus.findOne.mockResolvedValue(null);
+    Invoice.findOne.mockResolvedValue(null);
+    Ticket.findOne.mockResolvedValue(null);
   });
 
   it('batches every eligible email from one sync call into a single processEmails() call, not one per email', async () => {

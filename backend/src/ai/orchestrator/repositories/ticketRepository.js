@@ -1,7 +1,7 @@
 const Ticket = require('../../../models/Ticket');
 const { validateExtractedTicket } = Ticket;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
 
 /**
  * Persists an extracted Ticket and its Entity row. Idempotent on
@@ -25,6 +25,7 @@ async function persistTicket({ userId, emailDoc, extracted, summary, aiModel = n
     }
 
     const sourceUrl = buildSourceUrl({ provider: 'GMAIL', messageId: emailDoc.messageId });
+    const initialMessage = await buildInitialConversationMessage({ userId, emailDoc });
     const raw = {
         ...extracted,
         sourceUrl,
@@ -32,6 +33,7 @@ async function persistTicket({ userId, emailDoc, extracted, summary, aiModel = n
         threadId: emailDoc.threadId || null,
         messageId: emailDoc.messageId,
         metadata: summary ? { summary } : {},
+        conversation: initialMessage ? [initialMessage] : [],
     };
 
     const { ticket: validated, error } = validateExtractedTicket(raw);

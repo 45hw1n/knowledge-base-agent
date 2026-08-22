@@ -17,6 +17,11 @@ jest.mock('../../models/AppStatus', () => ({
   findOne: jest.fn(),
 }));
 
+// Used by conversationService.js's thread-reconciliation check, which now
+// runs on every processEmail() call before classification.
+jest.mock('../../models/Invoice', () => ({ findOne: jest.fn().mockResolvedValue(null) }));
+jest.mock('../../models/Ticket', () => ({ findOne: jest.fn().mockResolvedValue(null), updateOne: jest.fn() }));
+
 jest.mock('../../models/UserPreferences', () => ({
   findOne: jest.fn().mockResolvedValue(null),
 }));

@@ -1,7 +1,7 @@
 const Invoice = require('../../../models/Invoice');
 const { validateExtractedInvoice } = Invoice;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
 
 function buildInvoiceTitle(invoice) {
     if (invoice.invoiceNumber) return `Invoice ${invoice.invoiceNumber}`;
@@ -35,6 +35,7 @@ async function persistInvoice({ userId, emailDoc, extracted, summary, aiModel = 
     }
 
     const sourceUrl = buildSourceUrl({ provider: 'GMAIL', messageId: emailDoc.messageId });
+    const initialMessage = await buildInitialConversationMessage({ userId, emailDoc });
     const raw = {
         ...extracted,
         sourceUrl,
@@ -42,6 +43,7 @@ async function persistInvoice({ userId, emailDoc, extracted, summary, aiModel = 
         threadId: emailDoc.threadId || null,
         messageId: emailDoc.messageId,
         metadata: summary ? { summary } : {},
+        conversation: initialMessage ? [initialMessage] : [],
     };
 
     const { invoice: validated, error } = validateExtractedInvoice(raw);

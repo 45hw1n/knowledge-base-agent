@@ -2,6 +2,8 @@ const Entity = require('../../../models/Entity');
 const { generateDisplayId } = require('../../../services/displayIdService');
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
 const { findOrCreateThread } = require('../../../services/threadService');
+const { decryptClearText } = require('../../../utils/emailEncryption');
+const { buildConversationMessage } = require('../../../services/conversationService');
 
 /**
  * Creates the Entity registry row for a typed child that already exists
@@ -71,4 +73,52 @@ async function createEntityForTypedChild({ userId, type, title, entityId, emailD
     }
 }
 
-module.exports = { createEntityForTypedChild };
+/**
+ * Builds the first `conversation[]` entry for a freshly-created Invoice/
+ * Ticket from the email that triggered its extraction — shared by
+ * invoiceRepository.js/ticketRepository.js since the shape and rules are
+ * identical for both. Never throws; returns `null` if there's nothing
+ * usable to record (e.g. an undecryptable/empty body), in which case the
+ * caller simply gets an empty `conversation[]`, same as before this existed.
+ *
+ * `direction` is a real comparison, not a guess: RECEIVED unless the
+ * email's own `From` address matches the account owner's email.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {import('mongoose').Document} params.emailDoc - an EmailToProcess record
+ * @returns {Promise<object|null>}
+ */
+async function buildInitialConversationMessage({ userId, emailDoc }) {
+    let fromHeader = '';
+    try {
+        fromHeader = emailDoc.from ? decryptClearText(emailDoc.from) || '' : '';
+    } catch (error) {
+        console.error(`[entityRepository] Failed to decrypt From header for messageId=${emailDoc.messageId}:`, error.message);
+    }
+
+    let bodyText = '';
+    try {
+        bodyText = emailDoc.encryptedCleanText ? decryptClearText(emailDoc.encryptedCleanText) || '' : '';
+    } catch (error) {
+        console.error(`[entityRepository] Failed to decrypt body for messageId=${emailDoc.messageId}:`, error.message);
+    }
+
+    const { message, error } = await buildConversationMessage({
+        userId,
+        messageId: emailDoc.messageId,
+        fromHeader,
+        bodyText,
+        date: emailDoc.date,
+        attachments: emailDoc.attachments || [],
+    });
+
+    if (error) {
+        console.warn(`[entityRepository] Skipping initial conversation message for messageId=${emailDoc.messageId}: ${error}`);
+        return null;
+    }
+
+    return message;
+}
+
+module.exports = { createEntityForTypedChild, buildInitialConversationMessage };
