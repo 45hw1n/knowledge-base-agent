@@ -2,7 +2,7 @@ import { Paperclip } from "lucide-react";
 import { Badge } from "@/lib/ui/badge";
 import type { KnowledgeDocument } from "@/mocks/entities.types";
 import { formatDate } from "./format";
-import { DetailField, DetailGrid, SectionHeading, SourceFooter } from "./shared";
+import { DetailField, DetailGrid, SectionHeading } from "./shared";
 
 // Prop named `doc`, not `document` — this project renames the type itself
 // to KnowledgeDocument for the same reason: avoid shadowing the global DOM
@@ -58,8 +58,6 @@ export function DocumentDetail({ doc }: { doc: KnowledgeDocument }) {
           </div>
         </div>
       )}
-
-      <SourceFooter sourceUrl={doc.sourceUrl} createdAt={doc.createdAt} updatedAt={doc.updatedAt} />
     </div>
   );
 }

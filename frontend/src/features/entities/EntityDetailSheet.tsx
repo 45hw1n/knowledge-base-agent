@@ -4,6 +4,7 @@ import { ResponsiveSheet } from "@/components/ResponsiveSheet";
 import type { Entity, Invoice, Payment, Ticket, CalendarEvent, KnowledgeDocument } from "@/mocks/entities.types";
 import { GET_ENTITY_DETAIL } from "@/graphql/query/entities/entitiesQueries";
 import { EntityTypeBadge } from "./entityDisplay";
+import { SourceFooter } from "./details/shared";
 import { TicketDetail } from "./details/TicketDetail";
 import { InvoiceDetail } from "./details/InvoiceDetail";
 import { PaymentDetail } from "./details/PaymentDetail";
@@ -41,6 +42,14 @@ type EntityDetailResult =
 // `description` — Radix renders Description as a <p>, and Badge is a <div>;
 // nesting a div inside a p is invalid HTML there.
 export function EntityDetailSheet({ entity, open, onOpenChange }: EntityDetailSheetProps) {
+  const { data, loading } = useQuery<{ entityDetail: EntityDetailResult | null }>(GET_ENTITY_DETAIL, {
+    variables: { id: entity?.id ?? "" },
+    skip: !entity || !open,
+    fetchPolicy: "network-only",
+  });
+
+  const detail = open ? data?.entityDetail : undefined;
+
   return (
     <ResponsiveSheet
       open={open}
@@ -56,18 +65,21 @@ export function EntityDetailSheet({ entity, open, onOpenChange }: EntityDetailSh
           </span>
         )
       }
+      // Pinned outside the scrollable content (see ResponsiveSheet) — the
+      // same "View original source" link every typed entity carries,
+      // always visible regardless of scroll position.
+      footer={
+        detail && (
+          <SourceFooter sourceUrl={detail.sourceUrl} createdAt={detail.createdAt} updatedAt={detail.updatedAt} />
+        )
+      }
     >
-      {entity && open && <EntityDetailBody entityId={entity.id} />}
+      {entity && open && <EntityDetailBody loading={loading} detail={detail} />}
     </ResponsiveSheet>
   );
 }
 
-function EntityDetailBody({ entityId }: { entityId: string }) {
-  const { data, loading } = useQuery<{ entityDetail: EntityDetailResult | null }>(GET_ENTITY_DETAIL, {
-    variables: { id: entityId },
-    fetchPolicy: "network-only",
-  });
-
+function EntityDetailBody({ loading, detail }: { loading: boolean; detail: EntityDetailResult | null | undefined }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-muted-foreground">
@@ -76,7 +88,6 @@ function EntityDetailBody({ entityId }: { entityId: string }) {
     );
   }
 
-  const detail = data?.entityDetail;
   if (!detail) return <NotFound />;
 
   switch (detail.__typename) {

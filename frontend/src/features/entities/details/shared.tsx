@@ -45,7 +45,7 @@ export function SourceFooter({
   updatedAt: string;
 }) {
   return (
-    <div className="mt-6 flex flex-col gap-1 border-t pt-4 text-xs text-muted-foreground">
+    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
       <a
         href={sourceUrl}
         target="_blank"

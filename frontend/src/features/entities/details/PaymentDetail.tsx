@@ -1,7 +1,7 @@
 import { Badge } from "@/lib/ui/badge";
 import type { Payment, PaymentLinkMethod, InvoiceStatus } from "@/mocks/entities.types";
 import { formatDateTime, formatMoney } from "./format";
-import { DetailField, DetailGrid, PersonLine, SectionHeading, SourceFooter } from "./shared";
+import { DetailField, DetailGrid, PersonLine, SectionHeading } from "./shared";
 
 const LINK_METHOD_BADGE: Record<PaymentLinkMethod, string> = {
   THREAD_CONTEXT: "bg-sky-500/15 text-sky-400 border-sky-500/25 hover:bg-sky-500/25",
@@ -48,8 +48,6 @@ export function PaymentDetail({ payment }: { payment: Payment }) {
           <p className="text-sm text-muted-foreground">Not linked to any invoice — insufficient evidence to reconcile.</p>
         )}
       </div>
-
-      <SourceFooter sourceUrl={payment.sourceUrl} createdAt={payment.createdAt} updatedAt={payment.updatedAt} />
     </div>
   );
 }

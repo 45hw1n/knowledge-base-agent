@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { CalendarEvent } from "@/mocks/entities.types";
 import { formatDateTime } from "./format";
-import { DetailField, DetailGrid, PersonLine, SectionHeading, SourceFooter } from "./shared";
+import { DetailField, DetailGrid, PersonLine, SectionHeading } from "./shared";
 
 export function EventDetail({ event }: { event: CalendarEvent }) {
   return (
@@ -58,8 +58,6 @@ export function EventDetail({ event }: { event: CalendarEvent }) {
           </div>
         </div>
       )}
-
-      <SourceFooter sourceUrl={event.sourceUrl} createdAt={event.createdAt} updatedAt={event.updatedAt} />
     </div>
   );
 }
