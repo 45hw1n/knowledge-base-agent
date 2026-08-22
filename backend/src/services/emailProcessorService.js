@@ -1,10 +1,16 @@
 const mongoose = require("mongoose");
 const EmailToProcess = require("../models/EmailToProcess");
 const { extractAndPersistEntity } = require("../ai/orchestrator");
+const { updateAppStatusInternal } = require("../controllers/updateAppStatusController");
 
 const BATCH_SIZE = 5;
 const INTER_BATCH_DELAY_MS = 500;
 const AI_CONCURRENCY_LIMIT = 3;
+
+// Mirrors the stale-lock timeout already used for AppStatus's emailSyncStatus
+// lock (see webhookController.js) — a lock older than this is assumed to
+// belong to a crashed/killed worker, not one still genuinely in flight.
+const PROCESSING_LOCK_STALE_TIMEOUT_MS = 5 * 60 * 1000;
 
 // How long a record may sit in PROCESSING before it's assumed to belong to a
 // crashed/killed worker rather than one still genuinely in flight. Mirrors
@@ -81,18 +87,67 @@ async function reclaimStaleProcessing(userId) {
  * Uses atomic status transitions to prevent race conditions across concurrent workers.
  * Emails are processed in parallel batches of BATCH_SIZE.
  *
+ * Also owns the AppStatus `emailProcessingInProgress` lock and
+ * `lastEmailAIProcess{StartedAt,CompletedAt,Count}` bookkeeping — moved here
+ * (from the GraphQL resolver) so every caller gets identical tracking
+ * regardless of trigger source. Previously only the resolver-driven path set
+ * these fields, so a webhook's fire-and-forget autoProcess call was
+ * completely invisible to any frontend polling AppStatus. See decisions.md.
+ *
  * @param {Object} input
  * @param {string|ObjectId} input.userId - Required. Scopes all queries to this user.
  * @param {string[]} [input.ids] - Specific email IDs to process (must belong to userId)
  * @param {string} [input.status] - Filter by status (e.g. DETECTED, RETRY_PENDING, FAILED)
  * @param {number} [input.limit=50] - Max records to process
- * @returns {Object} - { queuedCount }
+ * @returns {Object} - { queuedCount, alreadyInProgress? }
  */
 async function processEmails({ ids, status, limit = 50, userId } = {}) {
   if (!userId) {
     throw new Error("userId is required for processEmails");
   }
 
+  // ── Acquire the emailProcessingInProgress lock ──────────────────────────
+  const lockTimeout = new Date(Date.now() - PROCESSING_LOCK_STALE_TIMEOUT_MS);
+  await updateAppStatusInternal(
+    userId,
+    { $set: { emailProcessingInProgress: false } },
+    {
+      emailProcessingInProgress: true,
+      lastEmailAIProcessStartedAt: { $lt: lockTimeout },
+    },
+  );
+
+  const lock = await updateAppStatusInternal(
+    userId,
+    {
+      $set: {
+        emailProcessingInProgress: true,
+        lastEmailAIProcessStartedAt: new Date(),
+        lastEmailAIProcessedCount: 0,
+      },
+    },
+    { emailProcessingInProgress: { $ne: true } },
+  );
+
+  if (!lock) {
+    console.log(`[EmailProcessor] Already in progress for userId=${userId}`);
+    return { queuedCount: 0, alreadyInProgress: true };
+  }
+
+  try {
+    return await runProcessEmails({ ids, status, limit, userId });
+  } finally {
+    await updateAppStatusInternal(userId, {
+      $set: { emailProcessingInProgress: false },
+    });
+  }
+}
+
+/**
+ * The actual find-and-process logic, run only once the caller holds the
+ * emailProcessingInProgress lock (see processEmails() above).
+ */
+async function runProcessEmails({ ids, status, limit = 50, userId }) {
   await reclaimStaleProcessing(userId);
 
   // All branches are scoped to the calling user — prevents cross-tenant access
@@ -227,6 +282,14 @@ async function processEmails({ ids, status, limit = 50, userId } = {}) {
   console.log(
     `[EmailProcessor] Queued ${queuedCount}/${emails.length} emails`,
   );
+
+  await updateAppStatusInternal(userId, {
+    $set: {
+      lastEmailAIProcessCompletedAt: new Date(),
+      lastEmailAIProcessedCount: queuedCount,
+    },
+  });
+
   return { queuedCount };
 }
 

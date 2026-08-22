@@ -10,6 +10,15 @@ jest.mock('../../ai/orchestrator', () => ({
   extractAndPersistEntity: jest.fn(),
 }));
 
+// processEmails() owns the AppStatus emailProcessingInProgress lock itself
+// now (moved here from the GraphQL resolver) — mocked so these tests never
+// touch real Mongo. Resolves truthy so the lock-acquire call always
+// succeeds; these tests are about the EmailToProcess locking/status
+// behavior, not the AppStatus lock itself.
+jest.mock('../../controllers/updateAppStatusController', () => ({
+  updateAppStatusInternal: jest.fn().mockResolvedValue({}),
+}));
+
 const mongoose = require('mongoose');
 const EmailToProcess = require('../../models/EmailToProcess');
 const { extractAndPersistEntity } = require('../../ai/orchestrator');

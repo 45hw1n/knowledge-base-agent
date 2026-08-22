@@ -579,49 +579,24 @@ const resolvers = {
                 };
             }
 
-            const lockTimeout = new Date(Date.now() - 5 * 60 * 1000);
-            await updateAppStatusInternal(
-                user._id,
-                { $set: { emailProcessingInProgress: false } },
-                {
-                    emailProcessingInProgress: true,
-                    lastEmailAIProcessStartedAt: { $lt: lockTimeout }
-                }
-            );
-
-            const lock = await updateAppStatusInternal(
-                user._id,
-                { $set: {
-                    emailProcessingInProgress: true,
-                    lastEmailAIProcessStartedAt: new Date(),
-                    lastEmailAIProcessedCount: 0
-                } },
-                { emailProcessingInProgress: { $ne: true } }
-            );
-
-            if (!lock) {
-                console.log(`[processEmails] Already in progress for user: ${user.displayName}`);
-                return {
-                    success: true,
-                    message: 'Processing already in progress',
-                    queuedCount: 0,
-                };
-            }
-
             try {
                 console.log(`Starting processEmails for user: ${user.displayName}`);
+                // Lock acquisition and AppStatus bookkeeping now live in
+                // emailProcessorService.processEmails() itself, so the
+                // webhook's autoProcess path gets identical tracking too.
                 const result = await emailProcessorService.processEmails({
                     ...input,
                     userId: user._id,
                 });
 
-                await updateAppStatusInternal(
-                    user._id,
-                    { $set: {
-                        lastEmailAIProcessCompletedAt: new Date(),
-                        lastEmailAIProcessedCount: result.queuedCount
-                    } }
-                );
+                if (result.alreadyInProgress) {
+                    console.log(`[processEmails] Already in progress for user: ${user.displayName}`);
+                    return {
+                        success: true,
+                        message: 'Processing already in progress',
+                        queuedCount: 0,
+                    };
+                }
 
                 return {
                     success: true,
@@ -635,11 +610,6 @@ const resolvers = {
                     message: `Processing failed: ${error.message}`,
                     queuedCount: 0,
                 };
-            } finally {
-                await updateAppStatusInternal(
-                    user._id,
-                    { $set: { emailProcessingInProgress: false } }
-                );
             }
         },
         testMutation: (_, { input }) => `You sent: ${input}`,
