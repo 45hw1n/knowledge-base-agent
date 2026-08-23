@@ -51,6 +51,19 @@ async function getSignedDownloadUrl({ storageKey, expiresInSeconds }) {
     return getSignedUrl(getClient(), command, { expiresIn: expiresInSeconds });
 }
 
+async function getObjectBuffer({ storageKey }) {
+    const response = await getClient().send(new GetObjectCommand({
+        Bucket: config.storage.bucketName,
+        Key: storageKey
+    }));
+
+    const chunks = [];
+    for await (const chunk of response.Body) {
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+}
+
 async function objectExists({ storageKey }) {
     try {
         await getClient().send(new HeadObjectCommand({
@@ -84,6 +97,7 @@ async function copyObject({ sourceKey, destinationKey }) {
 module.exports = {
     uploadObject,
     getSignedDownloadUrl,
+    getObjectBuffer,
     objectExists,
     deleteObject,
     copyObject

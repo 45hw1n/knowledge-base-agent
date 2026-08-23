@@ -32,3 +32,42 @@ export const GET_COMPLETED_ATTACHMENTS = gql`
     }
   }
 `;
+
+// Backs the standalone "manual entries" review page — every one of the
+// user's IN_PROGRESS/FAILED manual "Create Knowledge" submissions.
+export const GET_MANUAL_INGESTION_FAILURES = gql`
+  query GetManualIngestionFailures {
+    manualIngestionFailures {
+      id
+      type
+      details
+      summary
+      status
+      error {
+        code
+        message
+      }
+      attachments {
+        fileName
+        mimeType
+        size
+      }
+      createdAt
+    }
+  }
+`;
+
+export const DELETE_MANUAL_INGESTION_ITEM = gql`
+  mutation DeleteManualIngestionItem($id: ID!) {
+    deleteManualIngestionItem(id: $id)
+  }
+`;
+
+export const RETRY_MANUAL_INGESTION = gql`
+  mutation RetryManualIngestion($id: ID!, $input: CreateKnowledgebaseInput!) {
+    retryManualIngestion(id: $id, input: $input) {
+      creationId
+      status
+    }
+  }
+`;

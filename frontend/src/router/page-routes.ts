@@ -8,6 +8,7 @@ export type PageRouteNode = {
 export const PAGE_ROUTE_TREE: PageRouteNode[] = [
   { segment: "home", title: "Home" },
   { segment: "ask-cortex", title: "Ask Cortex" },
+  { segment: "manual-entries", title: "Manual Entries" },
 ];
 
 export type PageBreadcrumb = {

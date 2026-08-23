@@ -1,5 +1,5 @@
 import { useMutation } from "@apollo/client";
-import { Home, LogOut, MessageCircle } from "lucide-react";
+import { FileWarning, Home, LogOut, MessageCircle } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import CortexLogo from "@/assets/cortex-logo.svg";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
@@ -33,6 +33,7 @@ type SidebarNavItem = {
 const navItems: SidebarNavItem[] = [
   { label: "Home", href: "/home", icon: Home },
   { label: "Ask Cortex", href: "/ask-cortex", icon: MessageCircle },
+  { label: "Manual Entries", href: "/manual-entries", icon: FileWarning },
 ];
 
 const navLabelClassName =

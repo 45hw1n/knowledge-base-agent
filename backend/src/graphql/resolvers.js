@@ -35,6 +35,55 @@ const ENTITY_DETAIL_MODELS = {
     DOCUMENT: { Model: DocumentModel, typename: 'Document' },
 };
 
+/**
+ * Uploads each GraphQL `Upload` promise to R2 and returns both the
+ * durable refs (for `ManualIngestionItem.attachments`) and the in-memory
+ * buffers `processManualIngestion` needs to actually parse them — shared
+ * by `createKnowledbase` and `retryManualIngestion`, which both need to
+ * go from "freshly-submitted files" to "ready to hand to the orchestrator".
+ * Unsupported/oversized files are silently skipped (attachments are
+ * optional; details-only extraction still runs), matching the original
+ * inline logic this was extracted from.
+ *
+ * @param {object} params
+ * @param {AsyncIterable|Array<Promise>} params.files
+ * @param {string|ObjectId} params.userId
+ * @param {string|ObjectId} params.creationId - the owning ManualIngestionItem's _id
+ * @returns {Promise<{ attachmentRefs: Array<object>, attachmentBuffers: Array<object> }>}
+ */
+async function uploadManualAttachments({ files, userId, creationId }) {
+    const attachmentRefs = [];
+    const attachmentBuffers = [];
+
+    for (const filePromise of files || []) {
+        const upload = await filePromise;
+
+        const extension = getExtensionForMimeType(upload.mimetype);
+        if (!extension) {
+            await drainStream(upload.createReadStream());
+            continue;
+        }
+
+        let buffer;
+        try {
+            buffer = await bufferStream(upload.createReadStream(), DEFAULT_MAX_FILE_SIZE_BYTES);
+        } catch (error) {
+            continue; // file too large — skipped
+        }
+
+        const attachmentId = new mongoose.Types.ObjectId().toString();
+        const storageKey = buildManualIngestionStorageKey({ userId, creationId, attachmentId, extension });
+
+        await storageService.uploadObject({ storageKey, contentType: upload.mimetype, body: buffer });
+
+        const ref = { storageKey, fileName: upload.filename, mimeType: upload.mimetype, size: buffer.length };
+        attachmentRefs.push(ref);
+        attachmentBuffers.push({ ...ref, buffer });
+    }
+
+    return { attachmentRefs, attachmentBuffers };
+}
+
 function parseJsonLiteral(ast) {
     switch (ast.kind) {
         case Kind.STRING:
@@ -301,6 +350,34 @@ const resolvers = {
                     error: item.error || null,
                 };
             });
+        },
+        manualIngestionFailures: async (_, __, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const items = await ManualIngestionItem.find({
+                userId: user._id,
+                status: { $in: ['IN_PROGRESS', 'FAILED'] },
+            })
+                .sort({ createdAt: -1 })
+                .lean();
+
+            return items.map((item) => ({
+                id: item._id.toString(),
+                type: item.type,
+                details: item.details,
+                summary: item.summary,
+                status: item.status,
+                error: item.error || null,
+                attachments: (item.attachments || []).map((attachment) => ({
+                    attachmentId: attachment.storageKey,
+                    fileName: attachment.fileName,
+                    mimeType: attachment.mimeType,
+                    size: attachment.size,
+                })),
+                createdAt: item.createdAt.toISOString(),
+            }));
         },
     },
     EntityDetail: {
@@ -725,42 +802,15 @@ const resolvers = {
                 status: 'IN_PROGRESS',
             });
 
-            const attachmentBuffers = [];
-            const attachmentRefs = [];
+            let attachmentRefs;
+            let attachmentBuffers;
 
             try {
-                for (const filePromise of input.attachments || []) {
-                    const upload = await filePromise;
-
-                    const extension = getExtensionForMimeType(upload.mimetype);
-                    if (!extension) {
-                        // Unsupported type — skipped, not fatal. Attachments
-                        // are optional; details-only extraction still runs.
-                        await drainStream(upload.createReadStream());
-                        continue;
-                    }
-
-                    let buffer;
-                    try {
-                        buffer = await bufferStream(upload.createReadStream(), DEFAULT_MAX_FILE_SIZE_BYTES);
-                    } catch (error) {
-                        continue; // file too large — skipped, same reasoning as above
-                    }
-
-                    const attachmentId = new mongoose.Types.ObjectId().toString();
-                    const storageKey = buildManualIngestionStorageKey({
-                        userId: user._id,
-                        creationId: manualIngestionItem._id,
-                        attachmentId,
-                        extension,
-                    });
-
-                    await storageService.uploadObject({ storageKey, contentType: upload.mimetype, body: buffer });
-
-                    const ref = { storageKey, fileName: upload.filename, mimeType: upload.mimetype, size: buffer.length };
-                    attachmentRefs.push(ref);
-                    attachmentBuffers.push({ ...ref, buffer });
-                }
+                ({ attachmentRefs, attachmentBuffers } = await uploadManualAttachments({
+                    files: input.attachments,
+                    userId: user._id,
+                    creationId: manualIngestionItem._id,
+                }));
             } catch (error) {
                 // An actual infra failure (not a validation skip) — the
                 // submission never got a chance to start processing, so
@@ -789,6 +839,109 @@ const resolvers = {
             );
 
             return { creationId: manualIngestionItem._id, status: 'IN_PROGRESS' };
+        },
+        deleteManualIngestionItem: async (_, { id }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const item = await ManualIngestionItem.findOne({ _id: id, userId: user._id });
+            if (!item) {
+                throw new GraphQLError('Manual ingestion item not found', { extensions: { code: 'NOT_FOUND' } });
+            }
+            if (item.status === 'IN_PROGRESS') {
+                throw new GraphQLError('Cannot delete an item that is still in progress', {
+                    extensions: { code: 'INVALID_STATE' },
+                });
+            }
+
+            if (item.attachments.length > 0) {
+                await storageService.deleteKeys(item.attachments.map((attachment) => attachment.storageKey));
+            }
+            await ManualIngestionItem.deleteOne({ _id: item._id });
+
+            return true;
+        },
+        // "Retry with corrections" — edits type/details/attachments on the
+        // SAME record and re-runs the pipeline, rather than creating a
+        // second ManualIngestionItem for what's really one submission.
+        // Existing attachments are always kept and re-parsed alongside any
+        // newly-added ones; there's no way to drop an existing attachment
+        // from the edit form (out of scope — see decisions.md).
+        retryManualIngestion: async (_, { id, input }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const item = await ManualIngestionItem.findOne({ _id: id, userId: user._id });
+            if (!item) {
+                throw new GraphQLError('Manual ingestion item not found', { extensions: { code: 'NOT_FOUND' } });
+            }
+            if (item.status === 'IN_PROGRESS') {
+                throw new GraphQLError('Cannot edit an item that is still in progress', {
+                    extensions: { code: 'INVALID_STATE' },
+                });
+            }
+
+            const details = typeof input.details === 'string' ? input.details.trim() : '';
+            if (!details) {
+                throw new GraphQLError('"details" is required and must be a non-empty string', {
+                    extensions: { code: 'VALIDATION_ERROR' },
+                });
+            }
+
+            const { attachmentRefs: newRefs, attachmentBuffers: newBuffers } = await uploadManualAttachments({
+                files: input.attachments,
+                userId: user._id,
+                creationId: item._id,
+            }).catch(() => {
+                throw new GraphQLError('Failed to upload attachments', {
+                    extensions: { code: 'ATTACHMENT_UPLOAD_FAILED' },
+                });
+            });
+
+            const existingBuffers = [];
+            for (const existing of item.attachments) {
+                try {
+                    const buffer = await storageService.getObjectBuffer({ storageKey: existing.storageKey });
+                    existingBuffers.push({ ...existing.toObject(), buffer });
+                } catch (error) {
+                    console.error(
+                        `[retryManualIngestion] Failed to re-fetch existing attachment ${existing.storageKey}:`,
+                        error.message
+                    );
+                }
+            }
+
+            const attachmentRefs = [...item.attachments.map((a) => a.toObject()), ...newRefs];
+            const attachmentBuffers = [...existingBuffers, ...newBuffers];
+
+            await ManualIngestionItem.updateOne(
+                { _id: item._id },
+                {
+                    $set: {
+                        type: input.type,
+                        details,
+                        attachments: attachmentRefs,
+                        status: 'IN_PROGRESS',
+                        error: null,
+                        processingStartedAt: new Date(),
+                        processingCompletedAt: null,
+                    },
+                }
+            );
+
+            processManualIngestion({
+                manualIngestionItemId: item._id,
+                userId: user._id,
+                type: input.type,
+                details,
+                attachmentBuffers,
+            }).catch((error) =>
+                console.error('[retryManualIngestion] Unhandled error in async manual ingestion processing:', error)
+            );
+
+            return { creationId: item._id, status: 'IN_PROGRESS' };
         },
     }
 };

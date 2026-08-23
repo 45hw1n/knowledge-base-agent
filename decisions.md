@@ -2640,3 +2640,75 @@ and every `tailwind.config.js` token mapping to `oklch(var(--x) /
 utility across the whole app (currently all silently no-ops) start
 actually applying — a behavior change to every screen, not a safe
 drive-by fix.
+
+### Added: a "Manual Entries" page to review/retry/delete failed manual creations
+
+Until now, a manual "Create Knowledge" submission that failed (or was
+still processing when the tab closed) simply vanished from the user's
+view after its one-shot toast — the `ManualIngestionItem` row survived in
+Mongo, but there was no UI to ever see, fix, or discard it again. Asked
+for a table (entity id, type, summary truncated to 2 lines, status,
+edit/delete actions disabled while IN_PROGRESS); placement was a genuine
+open question, resolved via `AskUserQuestion` in favor of a **dedicated
+route** (`/manual-entries`) over folding it into the Home page, so it
+re-adds a third sidebar nav item after the recent Home/Ask-Cortex-only
+simplification.
+
+**"Edit" semantics were also an open question**, resolved the same way:
+edit reopens the `CreateKnowledge` modal pre-filled, and submitting
+**retries in place** (updates the same `ManualIngestionItem` and re-runs
+the pipeline) rather than deleting-and-recreating a new one — preserves
+the record's identity/history for what is really one logical submission.
+Existing attachments are always kept and re-parsed on retry; the edit
+form can only *add* more, not remove one of the existing ones (the
+`CreateKnowledgebaseInput` shape has no "keep list" field, and adding one
+felt like more surface area than this task needed) — shown as read-only
+`AttachmentCard`s with no remove button in edit mode.
+
+**Backend, new surface**:
+- `manualIngestionFailures` query — every one of the user's
+  `IN_PROGRESS`/`FAILED` items, never `COMPLETED` (those already have a
+  real Entity row and belong in the entities list, not here).
+- `deleteManualIngestionItem(id)` — refuses `IN_PROGRESS` **server-side**,
+  not just via a disabled frontend button, and best-effort deletes the
+  item's R2 objects before deleting the Mongo row.
+- `retryManualIngestion(id, input)` — same validation as
+  `createKnowledbase`, but updates the existing row (`status` →
+  `IN_PROGRESS`, `error` → `null`) instead of creating a new one, then
+  re-uploads any newly-added attachments and **re-downloads the bytes of
+  every existing attachment** (a new `storageService.getObjectBuffer`,
+  since attachment metadata alone has no buffer to re-parse) so the
+  merged extraction re-runs against the full attachment set, not just
+  the newly-added files.
+- The GraphQL-Upload-handling block inside `createKnowledbase` was
+  extracted into a shared `uploadManualAttachments()` helper so
+  `retryManualIngestion` doesn't duplicate it.
+
+**Two real bugs found and fixed while wiring this up, both caught by
+testing the actual mutations in the browser rather than trusting the
+code read-through**:
+1. `storageService.deleteKeys` was implemented and used internally by
+   `moveObjects` but **never added to `storageService`'s own
+   `module.exports`** — calling it from the new delete resolver threw
+   `storageService.deleteKeys is not a function` at runtime, something
+   `node --check`/lint never would have caught (valid syntax, just a
+   missing export). Confirmed by calling the mutation directly via
+   `fetch` against `/graphql` from the browser console — the stack trace
+   pointed straight at the missing export.
+2. Used a `window.confirm()` for the delete button's "are you sure"
+   prompt — this **froze the entire tab**, including this session's own
+   browser-automation tooling (native dialogs block all further CDP
+   commands), matching this session's own safety guidance about not
+   triggering native dialogs. Replaced with a small `Popover`-based
+   in-app confirm (`DeleteEntryButton` in `ManualEntriesTable.tsx`) that
+   matches the app's own styling and never blocks the page.
+
+**Verified end-to-end in the browser**: the failures table immediately
+surfaced three genuine pre-existing `FAILED` rows already sitting in the
+dev database from earlier in this session (two old duplicate-key debris
+rows, one real "missing title" extraction failure) — never visible in
+any UI before this page existed. Edited and retried one (pipeline
+correctly re-ran and landed back on `FAILED` with an updated error,
+proving retry-in-place works regardless of outcome), and deleted another
+(row disappeared, R2 cleanup ran, toast confirmed) after fixing bug #1
+above.

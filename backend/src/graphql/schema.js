@@ -559,6 +559,23 @@ const typeDefs = gql`
     error: ManualIngestionError
   }
 
+  """
+  A manual "Create Knowledge" submission that never finished successfully
+  — either still running or FAILED. Never includes COMPLETED items (see
+  manualIngestionFailures resolver); those already have a real Entity row
+  and belong in the entities list, not here.
+  """
+  type ManualIngestionFailure {
+    id: ID!
+    type: EntityType!
+    details: String!
+    summary: String
+    status: ManualIngestionStatus!
+    error: ManualIngestionError
+    attachments: [AttachmentRef!]!
+    createdAt: String!
+  }
+
   type Query {
     hello: String
     ping: String
@@ -580,6 +597,12 @@ const typeDefs = gql`
     FAILED); an IN_PROGRESS item simply isn't in the response yet.
     """
     manualIngestionStatus(creationIds: [ID!]!): [ManualIngestionStatusResult!]!
+    """
+    Every one of the current user's manual "Create Knowledge" submissions
+    that is still IN_PROGRESS or ended FAILED — backs the standalone
+    review page where those can be edited/retried or discarded.
+    """
+    manualIngestionFailures: [ManualIngestionFailure!]!
   }
 
   type Mutation {
@@ -597,6 +620,19 @@ const typeDefs = gql`
     instruction.
     """
     createKnowledbase(input: CreateKnowledgebaseInput!): CreateKnowledgebasePayload!
+    """
+    Permanently discards a FAILED (or still-IN_PROGRESS) manual submission.
+    Refuses IN_PROGRESS server-side, not just via a disabled frontend
+    button — the same rule the UI enforces is enforced here too.
+    """
+    deleteManualIngestionItem(id: ID!): Boolean!
+    """
+    Edits a FAILED submission's type/details/attachments in place and
+    re-runs the manual-ingestion pipeline against the SAME record —
+    "retry with corrections" rather than creating a second, orphaned
+    ManualIngestionItem for one logical submission.
+    """
+    retryManualIngestion(id: ID!, input: CreateKnowledgebaseInput!): CreateKnowledgebasePayload!
   }
 `;
 

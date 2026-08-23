@@ -5,6 +5,7 @@ import AppLayout from "@/layouts/AppLayout";
 import ConversationsPage from "@/pages/ConversationsPage";
 import HomePage from "@/pages/HomePage";
 import LoginPage from "@/pages/LoginPage";
+import ManualEntriesPage from "@/pages/ManualEntriesPage";
 import PrivacyPolicyPage from "@/pages/PrivacyPolicyPage";
 import TermsOfServicePage from "@/pages/TermsOfServicePage";
 import { ProtectedRoute } from "@/router/ProtectedRoute";
@@ -26,6 +27,7 @@ export function AppRoutes() {
             <Route path="/home" element={<HomePage />} />
             <Route path="/ask-cortex" element={<ConversationsPage />} />
             <Route path="/ask-cortex/:conversationId" element={<ConversationsPage />} />
+            <Route path="/manual-entries" element={<ManualEntriesPage />} />
           </Route>
         </Route>
 

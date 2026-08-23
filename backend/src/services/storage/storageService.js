@@ -43,6 +43,19 @@ async function getSignedDownloadUrl({ storageKey, expiresInSeconds = DEFAULT_DOW
 }
 
 /**
+ * Downloads an object's full bytes into memory — used when a stored
+ * attachment needs to be re-parsed (e.g. retrying a failed manual
+ * ingestion), as opposed to `getSignedDownloadUrl`, which only ever hands
+ * the browser a URL and never touches the bytes itself.
+ *
+ * @param {{ storageKey: string }} params
+ * @returns {Promise<Buffer>}
+ */
+async function getObjectBuffer({ storageKey }) {
+    return getProvider().getObjectBuffer({ storageKey });
+}
+
+/**
  * @param {{ storageKey: string }} params
  * @returns {Promise<boolean>}
  */
@@ -156,8 +169,10 @@ async function moveObjects(pairs) {
 module.exports = {
     uploadObject,
     getSignedDownloadUrl,
+    getObjectBuffer,
     objectExists,
     deleteObject,
+    deleteKeys,
     copyObject,
     moveObjects,
     DEFAULT_DOWNLOAD_URL_TTL_SECONDS
