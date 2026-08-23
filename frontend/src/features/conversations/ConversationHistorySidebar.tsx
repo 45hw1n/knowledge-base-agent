@@ -56,7 +56,7 @@ export function ConversationHistorySidebar({
   // fixed `w-64`/`w-72` instead of letting the text actually clip.
   const listContent = (
     <div className="flex h-full min-w-0 flex-col">
-      <div className="flex items-center justify-between gap-2 p-3">
+      <div className="flex items-center justify-between gap-2 border-b p-3">
         <span className="text-sm font-semibold">Recent Conversations</span>
         {isMobile && (
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onMobileOpenChange(false)}>
