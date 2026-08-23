@@ -1,5 +1,4 @@
 import { Outlet, useLocation } from "react-router-dom";
-import { AppSettings } from "@/components/AppSettings";
 import { AppSidebar } from "@/components/app-sidebar";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { PageShell } from "@/components/page-layout";
@@ -47,7 +46,6 @@ export default function AppLayout() {
               <LastSyncedAt />
             </div>
             <CreateKnowledgeTrigger />
-            <AppSettings />
           </div>
         </header>
         {isAskCortexRoute ? (
