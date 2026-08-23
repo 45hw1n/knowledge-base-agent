@@ -102,7 +102,7 @@ function ConversationMessageBubble({ message }: { message: ConversationMessage }
   const isReceived = message.direction === "RECEIVED";
 
   return (
-    <div className={cn("flex", isReceived ? "justify-end" : "justify-start")}>
+    <div className={cn("flex", isReceived ? "justify-start" : "justify-end")}>
       <div
         className={cn(
           "max-w-[80%] min-w-0 rounded-lg border p-3",
@@ -135,9 +135,8 @@ function ConversationMessageBubble({ message }: { message: ConversationMessage }
 
 /**
  * Renders a Ticket/Invoice's conversation[] inside the entity detail modal.
- * RECEIVED messages align right, SENT messages align left, each with a
- * distinct background — per the requested layout (the reverse of the usual
- * chat convention, deliberate per spec).
+ * RECEIVED messages align left, SENT messages align right, each with a
+ * distinct background — the usual chat convention.
  */
 export function Conversations({ messages }: { messages: ConversationMessage[] }) {
   if (messages.length === 0) {
