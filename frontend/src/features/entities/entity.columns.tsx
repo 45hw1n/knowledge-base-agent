@@ -1,5 +1,5 @@
 import { SuperColumnDef } from "@/components/SuperTable/SuperTable.types";
-import { EntitySourceBadge, EntityTypeBadge, ExtractionStatusBadge, formatDate } from "./entityDisplay";
+import { EntitySourceBadge, EntityTypeBadge, formatDate } from "./entityDisplay";
 import type { Entity } from "@/mocks/entities.types";
 
 // Resizing stays enabled on every column (SuperTable's drag-to-resize).
@@ -38,7 +38,7 @@ export function createEntityColumns(onTitleClick: (entity: Entity) => void): Sup
     },
     {
       // Nested path (source.type) — same shallow-lookup sorting caveat as
-      // "date"/"status" below, so sorting stays off here too.
+      // "date" below, so sorting stays off here too.
       id: "source",
       accessorKey: "source.type",
       header: "Source",
@@ -91,16 +91,6 @@ export function createEntityColumns(onTitleClick: (entity: Entity) => void): Sup
       defaultWidth: 150,
       maxWidth: 260,
       cell: ({ row }) => formatDate(row.original.createdAt),
-    },
-    {
-      // Same nested-path sorting caveat as "date" above.
-      id: "status",
-      accessorKey: "extraction.status",
-      header: "Status",
-      minWidth: 110,
-      defaultWidth: 130,
-      maxWidth: 260,
-      cell: ({ row }) => <ExtractionStatusBadge status={row.original.extraction.status} />,
     },
   ];
 }
