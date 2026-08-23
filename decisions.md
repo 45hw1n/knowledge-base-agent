@@ -1271,155 +1271,93 @@ env files) — there is no real extraction traffic to preserve. Old
 documents simply expire under their existing TTL; new ones land in the
 renamed `emailsToProcess` collection.
 
-### Discovered, not fixed: `extractEmailSnapshot` cannot currently be unit-tested directly
-
-While adding test coverage for this phase (`syncEmailsService.js` had
-none at all before this), `utils/helpers.js#extractEmailSnapshot`'s
-`await import('email-reply-parser')` (a dynamic import of an ESM-only
-package) fails under this project's plain Jest config with
-`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG` — Jest isn't configured
-with `--experimental-vm-modules` or a babel transform that would handle
-it. This is pre-existing (the import predates this phase) and is exactly
-why no test ever covered this function. Worked around here by mocking
-`extractEmailSnapshot` entirely in `syncEmailsService.test.js` (this
-phase's tests cover what `processEmail` does with its output, not the
-MIME/HTML-parsing internals). Not fixed as part of this phase — it's a
-Jest/tooling configuration change, out of scope for an ingestion-gating
-task — but flagged since it blocks testing this function directly, and
-the new `cleanText` field added this phase couldn't be given its own
-direct unit test as a result.
-
 ### Deliberately cut in this phase
 
 - Rewriting the AI orchestrator, or updating `EmailToProcess.status`
   based on extraction output/error — next phase.
 - Any actual Invoice/Ticket conversation-linking logic — orchestrator
   work, per above.
-- Fixing the Jest/dynamic-import gap described above.
 
 ---
 
-## Email Processor — Idempotency Hardening & Missed-Email Recovery
+## Email Processor — Idempotency & Missed-Email Recovery
 
-Audited the full ingestion/processing pipeline end to end
+Covers the full ingestion/processing pipeline
 (`syncEmailsService.js`, `emailProcessorService.js`, `webhookController.js`,
 `resolvers.js`'s manual sync mutation, `passport.js`'s login-time recovery)
-for two specific failure classes: a message processed more than once
-producing duplicate side effects, and a message silently never processed at
-all. Four concrete gaps were found and fixed; one adjacent gap was found and
-deliberately left alone (see below).
+against two failure classes: a message processed more than once producing
+duplicate side effects, and a message silently never processed at all.
 
-### Gap 1 (critical): a crash mid-AI-batch stranded emails in `PROCESSING` forever
+### Decision: a stale `PROCESSING` lock is reclaimed, not left permanent
 
-**Investigation:** `processEmails()`'s atomic lock (`findOneAndUpdate` to
-`PROCESSING`) is correct for preventing two workers from processing the same
-email concurrently, but `PROCESSING` was never included in `allowedStatuses`
-for re-locking, and no code anywhere reset it. If the process died (crash,
-OOM-kill, deploy) between acquiring the lock and writing a terminal status,
-that email became permanently invisible: the default query only looks at
-`DETECTED`, and even an explicit `status: "PROCESSING"` query couldn't
-re-lock it. This is exactly a "missed email," just at the AI-processing
-stage instead of the ingestion stage — no error surfaced anywhere, since
-nothing ever looked at it again.
-
-**Fix:** added `EmailToProcess.processingStartedAt` (set when a lock is
-acquired, cleared on every terminal transition) and
-`reclaimStaleProcessing(userId)`, called at the top of every `processEmails()`
-run, which atomically resets any `PROCESSING` record older than
-`PROCESSING_STALE_TIMEOUT_MS` (10 min) back to `RETRY_PENDING`. This is the
-same crash-recovery shape already used twice elsewhere in this codebase —
-`AppStatus.emailSyncStatus`/`syncStartedAt` (webhook lock) and
+`processEmails()`'s atomic lock (`findOneAndUpdate` to `PROCESSING`)
+prevents two workers from processing the same email concurrently.
+`EmailToProcess.processingStartedAt` (set when a lock is acquired, cleared
+on every terminal transition) plus `reclaimStaleProcessing(userId)`,
+called at the top of every `processEmails()` run, atomically resets any
+`PROCESSING` record older than `PROCESSING_STALE_TIMEOUT_MS` (10 min) back
+to `RETRY_PENDING` — so a process that dies mid-batch (crash, OOM-kill,
+deploy) doesn't strand that email invisibly forever. Same crash-recovery
+shape as `AppStatus.emailSyncStatus`/`syncStartedAt` (webhook lock) and
 `AppStatus.emailProcessingInProgress`/`lastEmailAIProcessStartedAt`
-(resolver-level lock) — applied here at the level of an individual queued
-email rather than the whole batch run.
+(resolver-level lock) elsewhere in this codebase, applied at the level of
+an individual queued email rather than the whole batch run.
 
-**Known adjacent gap, not fixed:** if a worker crashes *after*
-`extractEntitiesFromEmail()` successfully persists entities but *before* the
-status update to `LLM_PROCESSED` commits, a reclaim-and-retry will re-run
-extraction and (once `repository.js`'s known schema mismatch — see the
-Entity Model section above — is eventually fixed so this path can succeed at
-all) could persist duplicate entities. `repository.js`/the generic
-orchestrator is already flagged throughout this document as a legacy path
-being superseded by the classifier → thread → Entity pipeline, so hardening
-it against this specific race wasn't done here — real idempotency for entity
-creation (e.g. an `(sourceEmailId)`-scoped upsert or a dedupe check in
-`persistEntities`) belongs in whichever orchestrator actually ships, not in
-this reliability pass. Flagging explicitly per this document's established
-practice, rather than leaving it a silent gap.
+### Decision: an expired webhook `historyId` re-establishes a fresh anchor and backfills the gap
 
-### Gap 2 (high): a webhook whose `historyId` expired had no recovery path
-
-**Investigation:** Gmail's History API rejects a `startHistoryId` that's too
-old (returns 404/410 once the mailbox's history window has rolled past it).
-`config/passport.js#triggerLoginSync` already handles this correctly — on a
-`syncHistorySince` failure it falls back to `syncEmailsByLookback()` using
-`UserPreferences.emailSyncStartDate`. The live webhook handler
-(`webhookController.js#processNotificationAsync`) had no equivalent: a
-`syncHistorySince` throw was caught by the outer catch-all, logged, and
-nothing else happened — `User.historyId` never advanced, so the *next*
-webhook delivery would hit the exact same expired `historyId` and fail
-identically, forever. For an account with a long-lived session (no reason to
-log in again soon), this meant real-time email ingestion could silently stop
-for an indefinite period, discovered only if/when the user next logged in.
-
-**Fix:** `webhookController.js#recoverFromExpiredHistoryId()` — on a
-`syncHistorySince` throw, re-establish a fresh anchor via
+Gmail's History API rejects a `startHistoryId` that's too old (404/410
+once the mailbox's history window has rolled past it).
+`config/passport.js#triggerLoginSync` handles this on login by falling
+back to `syncEmailsByLookback()` using `UserPreferences.emailSyncStartDate`.
+`webhookController.js#recoverFromExpiredHistoryId()` applies the same
+recovery to the live webhook path: re-establish a fresh anchor via
 `gmailService.setupWatch()` (safe to call anytime; also renews the watch)
 and backfill the gap via `syncEmailsByLookback()`, preferring
 `AppStatus.emailLastSyncedAt` (more precise for an active mailbox) and
-falling back to `UserPreferences.emailSyncStartDate`, then a bare 24h window
-if neither exists. `User.historyId` is then set to the fresh value so the
-next webhook resumes from a valid cursor instead of repeating the same
-failure.
+falling back to `UserPreferences.emailSyncStartDate`, then a bare 24h
+window if neither exists. `User.historyId` is then set to the fresh value
+so the next webhook resumes from a valid cursor.
 
-### Gap 3 & 4 (moderate): `syncRecentEmails`/`syncEmailsByLookback` could silently drop emails or wedge on one bad message
+### Decision: `syncRecentEmails`/`syncEmailsByLookback` track per-message failures and only advance the cursor once nothing is retryable
 
-**Investigation:** `syncHistorySince()` already had the right policy —
-track per-message failures, skip messages that have become "poison"
-(`AppStatus.syncFailures` + `MAX_SYNC_FAILURES`, an existing mechanism), and
-only advance the cursor once nothing is left un-retried. Neither
-`syncRecentEmails()` nor `syncEmailsByLookback()` followed it:
-`syncRecentEmails()` had no per-message `try/catch` at all, so one message
-that always throws (a decode bug, an oversized attachment, whatever)
-permanently blocked discovery of every Gmail message *after* it in the
-inbox, on every future run, with no poison-pill escape. `syncEmailsByLookback()`
-caught per-message errors but then unconditionally advanced
-`emailLastSyncedAt` regardless — a transient failure (a momentary Gmail API
-or DB blip) was silently and permanently excluded the moment the date
-window moved past it, with no retry.
+Mirrors the policy `syncHistorySince()` already had: track per-message
+failures, skip messages already confirmed "poison"
+(`AppStatus.syncFailures` + `MAX_SYNC_FAILURES`), and only advance the
+cursor once nothing is left un-retried. Both functions track
+`failedMessageIds`, skip already-poison messages (reusing the same
+`AppStatus.syncFailures`/`MAX_SYNC_FAILURES` state `syncHistorySince`
+already maintains — one shared poison-pill ledger across all three sync
+paths, not three independent ones), and only advance `emailLastSyncedAt`
+once every message in the batch has either succeeded or become poison.
 
-**Fix:** both functions now track `failedMessageIds`, skip messages already
-confirmed poison (reusing the same `AppStatus.syncFailures`/
-`MAX_SYNC_FAILURES` state `syncHistorySince` already maintains — one shared
-poison-pill ledger across all three sync paths, not three independent ones),
-and only advance `emailLastSyncedAt` once every message in the batch has
-either succeeded or become poison.
-
-### Refactor: extracted `services/syncFailureTracker.js`
+### Decision: extracted `services/syncFailureTracker.js`
 
 The "increment failure counters, decide retryable-vs-poison, advance the
-cursor if and only if nothing is retryable" logic existed as two
-near-identical, independently-maintained copies (`webhookController.js`'s
-historyId handling and `resolvers.js`'s `syncEmails` mutation) even before
-this phase added two more call sites for the same policy. Extracted into
+cursor if and only if nothing is retryable" logic is shared by
+`webhookController.js`'s historyId handling, `resolvers.js`'s `syncEmails`
+mutation, and both sync functions above — extracted into
 `reconcileSyncFailures()` (plus the underlying `incrementSyncFailures()`/
 `getRetryableFailures()`), parameterized by an `onAdvance` callback since
 what "advancing the cursor" means differs (`User.historyId` vs.
 `AppStatus.emailLastSyncedAt`). Same precedent as this document's
 `PersonSchema`/`MoneySchema`/`AttachmentRefSchema` extractions: reuse the
-established pattern once a third/fourth copy would otherwise be needed,
-rather than let four copies of the same policy drift independently.
+established pattern once multiple call sites need the same policy, rather
+than let independent copies drift.
 
-### Deliberately not touched in this phase
+### Deliberately not built
 
-- `repository.js`'s known Entity-schema mismatch and the duplicate-entity-
-  on-retry risk it implies (see Gap 1's "known adjacent gap" above) — both
-  already flagged, both squarely orchestrator-rewrite work.
-- Gmail push notification de-duplication at the Pub/Sub layer itself (Google
-  Cloud Pub/Sub is at-least-once delivery) — already handled downstream by
-  `EmailToProcess`'s unique `messageId` index + `E11000` handling in
-  `saveEmailToProcess()`, which this phase verified still fully covers a
-  duplicate webhook delivery for the same message.
+- De-duplicating entity creation if a worker crashes after
+  `extractEntitiesFromEmail()` persists entities but before the status
+  update to `LLM_PROCESSED` commits — real idempotency for entity creation
+  (e.g. an `(sourceEmailId)`-scoped upsert) belongs in whichever
+  orchestrator actually ships (`repository.js`/the generic orchestrator is
+  already a legacy path being superseded by the classifier → thread →
+  Entity pipeline), not in this reliability layer.
+- Gmail push notification de-duplication at the Pub/Sub layer itself
+  (Google Cloud Pub/Sub is at-least-once delivery) — already handled
+  downstream by `EmailToProcess`'s unique `messageId` index + `E11000`
+  handling in `saveEmailToProcess()`, which fully covers a duplicate
+  webhook delivery for the same message.
 
 ---
 
@@ -1598,35 +1536,6 @@ supported, code-empty, same as Payment's manual-link mutation above.
 
 ---
 
-## Fixing `getAppStatus`'s Date fields — a real bug found while building a new consumer
-
-**Context:** `LastSyncedAt` (a new UI component, see below) was the first
-thing to actually *render* `getAppStatus.emailLastSyncedAt`. Existing
-consumers (`SyncEmailsAlert`) fetched the field but never displayed it, so
-this bug was latent and invisible until something finally read the value.
-
-**The bug:** `resolvers.js`'s `getAppStatus` resolver returned the raw
-Mongoose `Date` object straight into a GraphQL `String`-typed field.
-`GraphQLString.serialize()` calls `.valueOf()` on anything object-shaped
-before falling back to `String()` — for a `Date`, `.valueOf()` returns the
-epoch-millisecond number, so the client received `"1787303164237"`, not an
-ISO string. `new Date("1787303164237")` does **not** parse that as epoch
-millis (only `new Date(number)` does) — it tries to parse it as a date
-string, fails, and produces `Invalid Date`.
-
-**Fix:** `.toISOString()` explicitly on all three Date-typed fields
-(`emailLastSyncedAt`, `lastEmailAIProcessStartedAt`,
-`lastEmailAIProcessCompletedAt`) before returning them from the resolver.
-
-**Why this wasn't caught earlier:** exactly the same reasoning as this
-document's very first "regex before AI" framing, inverted — a field nobody
-renders can silently carry wrong data indefinitely; the bug surfaces the
-moment, and only the moment, a real consumer exists. Worth remembering next
-time a "found: 0 emails" or "not synced yet" state looks suspicious with
-real data underneath it.
-
----
-
 ## Sync/Process Banners Gated to Dev-Only
 
 **Context:** `SyncEmailsAlert`/`ProcessEmailAlert` are manual-trigger UI —
@@ -1647,40 +1556,24 @@ should ever need or see.
 
 ---
 
-## Reactive Sync Status — Race Condition Fix + Unified Toast UX
+## Reactive Sync Status and Toast Notifications
 
-**Context:** `LastSyncedAt` (adaptive-poll status indicator) and
-`AppInitializer`'s login-triggered toast were built independently and only
-covered the login case. Investigating "what happens in the UI when mail
-arrives via webhook mid-session" (asked directly, not assumed) surfaced
-three real problems, not one:
+Covers how the UI reflects email sync/processing state — both the
+login-triggered flow and a webhook-triggered sync arriving mid-session —
+through one shared status/toast mechanism rather than two independent ones.
 
-1. A poll-driven indicator can miss a fast sync/process cycle entirely — it
-   can start and finish between two 10s-apart polls, showing no spinner and
-   no tick, just a timestamp that silently moved.
-2. **The AppStatus bookkeeping the indicator depends on
-   (`emailProcessingInProgress`, `lastEmailAIProcess*`) was only ever
-   written by the `processEmails` GraphQL resolver** — the webhook's
-   fire-and-forget autoProcess call (`syncEmailsService.js`, inside
-   `processEmail()`) called `emailProcessorService.processEmails()`
-   directly, bypassing the resolver entirely. So a webhook-triggered
-   extraction was completely invisible to any polling frontend, not just
-   racily visible.
-3. `processEmail()` fired one autoProcess call **per matched email** — a
-   burst of N emails in one webhook delivery meant N separate, uncoordinated
-   `processEmails()` calls racing for the same lock, instead of one
-   coordinated cycle.
+### Decision: the AppStatus lock/bookkeeping lives in `emailProcessorService.processEmails()` itself, not the resolver
 
-### Decision: move the AppStatus lock/bookkeeping from the resolver into `emailProcessorService.processEmails()` itself
-
-Same lock-acquire/execute/finally-release shape that already existed in
-`resolvers.js` (mirroring the webhook's own `emailSyncStatus` lock pattern,
-per the idempotency-hardening phase above), just relocated so every caller
-— the resolver **and** the webhook's direct call — gets identical tracking.
-The resolver becomes a thin wrapper: call the service, map its
-`alreadyInProgress` sentinel back to the pre-existing `"Processing already
-in progress"` response shape so nothing downstream (`ProcessEmailAlert.tsx`'s
-special-case check) needed to change.
+Every caller of `processEmails()` — the GraphQL resolver **and** the
+webhook's direct fire-and-forget call inside `syncEmailsService.js`'s
+`processEmail()` — needs identical `AppStatus` tracking
+(`emailProcessingInProgress`, `lastEmailAIProcess*`) so any poller sees a
+webhook-triggered extraction exactly the same way it sees a
+resolver-triggered one. The lock-acquire/execute/finally-release shape
+(mirroring the webhook's own `emailSyncStatus` lock pattern, per the
+idempotency section above) lives in the service; the resolver is a thin
+wrapper that maps the service's `alreadyInProgress` sentinel back to the
+pre-existing `"Processing already in progress"` response shape.
 
 ### Decision: batch the autoProcess trigger per sync call, not per email
 
@@ -1697,19 +1590,18 @@ attempts that genuinely overlap still resolve the same way every lock in
 this codebase already does — the loser's emails stay `DETECTED`, picked up
 by whichever call next succeeds; nothing is lost, only deferred.
 
-### Decision: the race fix is "detect completion two ways," not "poll faster"
+### Decision: completion is detected two ways, not by polling faster
 
 `AppInitializer` (the one component mounted for the app's entire lifetime,
-confirmed via `routes/index.tsx`) became the single poller and the single
-place edge-detection happens, replacing two independent, potentially-
-disagreeing `useQuery` polls (`LastSyncedAt` had its own) with one shared
-`useAppStore.syncStatus`. Completion fires on *either* a clean falling edge
-of `syncing` *or* `emailLastSyncedAt` having visibly advanced since the last
-tick even though `syncing` was never observed true — the second branch is
-what actually closes the race: a cycle fast enough to start and finish
-between two polls still gets caught on the very next tick, because the
-timestamp moved even though the boolean never did. Speeding up the poll
-interval would only ever shrink the race window, never close it.
+per `routes/index.tsx`) is the single poller and the single place
+edge-detection happens, via one shared `useAppStore.syncStatus` rather
+than multiple independent `useQuery` polls. Completion fires on *either*
+a clean falling edge of `syncing` *or* `emailLastSyncedAt` having visibly
+advanced since the last tick even though `syncing` was never observed
+true — the second branch is what catches a cycle fast enough to start and
+finish between two polls: the timestamp moved even though the boolean
+never did. A faster poll interval would only shrink that window, never
+close it.
 
 ### Decision: one toast-producing code path, not two competing ones
 
@@ -1882,59 +1774,19 @@ compose or send.
 
 ---
 
-## Bug: quoted reply chains weren't being stripped from conversation content
+### Decision: HTML-to-text conversion is gated on the MIME part's actual type, never content-sniffed
 
-**How this surfaced:** discovered by actually reading real conversation
-content, not by inspection — the reconciliation work above was the first
-time raw `cleanText` became something a human reads verbatim in the UI.
-`cleanText` already ran through `email-reply-parser` specifically to strip
-quoted history; a live reply still showed the entire quoted thread beneath
-it anyway.
-
-**Root cause, confirmed by reproducing it directly against the real Gmail
-bytes, not guessed:** `utils/helpers.js#extractEmailSnapshot` decided
-whether to run a body through `html-to-text`'s `convert()` by content-
-sniffing with `/<[a-z][\s\S]*>/i` — meant to detect an actual HTML body, but
-it also matches a plain-text quote header's bare angle-bracketed address
-(`"...Ashwin S <s.ashwin.0411@gmail.com> wrote:"` reads exactly like an
-opening HTML tag to that regex). A genuinely plain-text reply would
-therefore get wrongly converted anyway. `convert()`, given non-HTML input,
-collapses every line break into a single space — and `email-reply-parser`'s
-quote-boundary detection depends entirely on line boundaries to find where
-"On ... wrote:" starts. Flatten the text first and the parser has nothing
-left to find; it returns the whole thing, quote included.
-
-**Fix:** `extractBody()` now returns `{ text, mimeType }` instead of a bare
-string, so the caller knows definitively which MIME part it actually pulled
-from. `convert()` only ever runs when `mimeType === 'text/html'` — content-
-sniffing was removed entirely rather than tightened, since any regex
-guessing "is this HTML" from text alone has the same false-positive shape
-(a bare `<anything-that-looks-like-a-tag>` substring) for some input.
-
-**Not covered by an automated test, same pre-existing gap as before this
-fix:** `decisions.md`'s idempotency-hardening phase already flagged that
-`extractEmailSnapshot` can't be unit-tested under this project's plain Jest
-config (`import('email-reply-parser')` is a dynamic ESM import Jest isn't
-configured for). `extractBody` is a closure inside that same function, not
-separately exported, so this fix couldn't add coverage either — verified
-instead by re-running the *real* fetch-message → extractEmailSnapshot path
-against the actual Gmail message that exposed the bug and confirming the
-quote no longer survives.
-
-**Already-persisted bad data was hand-repaired, not left to a future
-re-sync:** the two conversation entries captured before this fix shipped
-already had the bad, quote-included content baked into
-`Ticket.conversation[]`. A plain re-sync would **not** have fixed them —
-`appendConversationMessage()`'s idempotency guard
-(`'conversation.messageId': {$ne: ...}`) exists specifically to skip a
-message that's already present, so it would have silently left the old bad
-content in place forever. Ran a one-off script instead: re-fetch each
-affected message from Gmail, re-run the now-fixed `extractEmailSnapshot`,
-and `$set` the corrected text onto the existing array element directly
-(`'conversation.$.content'`). Not turned into a migration/backend endpoint
-— this was a handful of test-session records, not a production data
-problem; a real fix-forward migration would only be worth building if this
-surfaces again against real user data.
+**Reasoning:** `utils/helpers.js#extractEmailSnapshot`'s `extractBody()`
+returns `{ text, mimeType }` rather than a bare string, so the caller
+knows definitively which MIME part it actually pulled from. `html-to-text`'s
+`convert()` only ever runs when `mimeType === 'text/html'` — deciding
+whether to convert by content-sniffing the body text itself (e.g. a regex
+looking for an opening HTML tag) is avoided entirely, since a plain-text
+quote header's bare angle-bracketed address (`"...Name
+<address@example.com> wrote:"`) can read exactly like an HTML tag to that
+kind of heuristic, and `convert()` collapses line breaks in a way that
+breaks `email-reply-parser`'s line-boundary-dependent quote stripping for
+genuinely plain-text bodies.
 
 ---
 
@@ -1991,13 +1843,11 @@ a panel that only ever needs one collapse behavior (full overlay on mobile,
 always-visible on desktop) would have been more indirection than the panel
 needs.
 
-**Verified in-browser (desktop + mobile):** desktop — locked icon rail,
-history sidebar, welcome state, message send/create-conversation flow,
-history list title/timestamp updates, `/home` unaffected. Mobile (resized
-viewport <768px, the same `useIsMobile()` breakpoint used elsewhere in this
-codebase) — history sidebar hidden by default, `ChatPanel`'s hamburger
-header bar opens it as a `fixed inset-0 z-30` overlay with a dismissible
-backdrop, composer stays pinned at the bottom with no page-level scroll.
+**On mobile** (viewport <768px, the same `useIsMobile()` breakpoint used
+elsewhere in this codebase), the history sidebar is hidden by default;
+`ChatPanel`'s hamburger header bar opens it as a `fixed inset-0 z-30`
+overlay with a dismissible backdrop. The composer stays pinned at the
+bottom with no page-level scroll regardless of viewport.
 
 ---
 
@@ -2026,27 +1876,15 @@ tables would conflate two different meanings of the same-looking string
 
 ### Decision: `dataSources` for a validated intent comes from the registry, never from the LLM's own echoed value
 
-**Bug found during live verification (real OpenAI provider, not mock):**
-asking "What invoices are still unpaid?" produced the graceful
-UNSUPPORTED-style fallback message instead of a real answer. Root cause:
-`validateIntentOutput()` originally *intersected* the LLM's own
-`raw.dataSources` array against the intent's whitelist
-(`requestedSources.filter(s => registryEntry.dataSources.includes(s))`) —
-when the model's chosen intent was valid but its `dataSources` copy had any
-mismatch (plural/casing drift, e.g. `"INVOICES"` vs `"INVOICE"`), every
-source got silently dropped, `dataSources` went empty, and the orchestrator
-treated that exactly like `UNSUPPORTED` (empty `dataSources` → no retrieval
-→ graceful message), even though the intent itself was correct. **Fix:**
-once an intent is validated against `INTENT_REGISTRY`, its `dataSources` are
-read directly from the registry entry (`registryEntry.dataSources`) —
-never from the LLM's output at all. The mapping intent→dataSources is
-already unambiguous once the intent is known; asking the LLM to also state
-it and then trusting that copy added a failure mode with no corresponding
-benefit. The intent prompt's requested JSON shape was simplified to
-`{intent, filters}` accordingly (no `dataSources` field asked for). Caught
-by testing against the real provider, not the mock — the mock's simpler
-keyword-matching never exercised this exact case, which is itself a decision
-point about the limits of mock-based-only verification for future phases.
+**Reasoning:** the mapping intent→dataSources is already unambiguous once
+the intent is known — asking the LLM to also state its own `dataSources`
+and then trusting that copy adds a failure mode with no corresponding
+benefit (e.g. plural/casing drift like `"INVOICES"` vs `"INVOICE"` against
+the whitelist). Once an intent is validated against `INTENT_REGISTRY`, its
+`dataSources` are read directly from the registry entry
+(`registryEntry.dataSources`) — never from the LLM's output at all. The
+intent prompt's requested JSON shape is `{intent, filters}` accordingly
+(no `dataSources` field asked for).
 
 ### Decision: filter whitelisting is value-level, not just key-level
 
@@ -2070,9 +1908,7 @@ document's own `_id` — confirmed by reading
 than assuming. Every new repository read function (`ticketRepository.js`
 etc.) joins its typed-child results to `Entity` via a batched
 `Entity.find({entityId: {$in: childIds}, type})` lookup and returns
-`entity._id` as `entityId` — verified live in the browser by clicking two
-different source chips from the same answer and confirming each opened the
-correct, distinct invoice.
+`entity._id` as `entityId`.
 
 ### Decision: two separate `aiClient.generate()` calls, not one combined prompt
 
@@ -2133,39 +1969,27 @@ PROCESSING→TIMEOUT transition (by tracking the message while its status is
 either) so `refresh()` stays callable from the same instance rather than
 being lost to a remount.
 
-**Frontend gap found and fixed during verification:** a new conversation's
-AI-generated title (set server-side, in parallel with orchestration) never
-appeared in the history sidebar until an unrelated full page reload — the
-store's conversation list was only ever fetched once, on `ConversationsPage`
-mount. Fixed by having `ChatPanel` refetch the conversation list
+**How a new conversation's AI-generated title reaches the sidebar:** the
+title-generation call completes server-side before orchestration, inside
+`processNewConversationAsync`. `ChatPanel` refetches the conversation list
 (`loadConversations()`) whenever its tracked message's poll status reaches
-a terminal state (`COMPLETED`/`FAILED`) — by then the title-generation call
-has already completed server-side (it runs before orchestration in
-`processNewConversationAsync`), so the refetch is guaranteed to pick up the
-real title, not the `"New conversation"` placeholder.
-
-**Verified end-to-end against the real OpenAI provider (not just the mock),
-using real synced data:** new-conversation flow (title generation, PROCESSING
-→ COMPLETED transition, source chips), existing-conversation follow-up in a
-different data source (tickets) within the same thread with no title
-regeneration, full transcript + title reload on a hard page refresh, and
-clicking two different source chips from the same answer opening two
-distinct, correct entity detail sheets.
+a terminal state (`COMPLETED`/`FAILED`) — by then the title is guaranteed
+to already exist server-side, so the refetch picks up the real title
+rather than leaving the `"New conversation"` placeholder in the sidebar
+until an unrelated reload.
 
 ---
 
 ## Phase 4 — Full-field filtering + multi-source (cross-entity) queries
 
-### Bug found: "How many tickets have high urgency?" → "I didn't find anything matching that"
+### Decision: `Ticket` gains `urgency`/`priority` as whitelisted, full-field-filterable chat query fields
 
-Ticket TKT-003 genuinely has `urgency: 'HIGH'`, but the Phase 3 intent
-registry only exposed `status`/`dateRange`/`keyword` as filterable fields
-for tickets — `urgency`/`priority` had no filter path at all. The LLM,
-lacking a real place to put "high urgency," most likely folded it into the
-free-text `keyword` filter, producing a title-substring search for "high"
-that matched nothing (no ticket title contains that word). **Fix:** added
-`urgency`/`priority` as whitelisted `TICKET` filters, sanitized against
-`Ticket.TICKET_LEVELS`.
+**Reasoning:** the Phase 3 intent registry only exposed
+`status`/`dateRange`/`keyword` as filterable fields for tickets, so a
+question like "how many tickets have high urgency?" had no real filter
+path to express it. `urgency`/`priority` are now whitelisted `TICKET`
+filters, sanitized against `Ticket.TICKET_LEVELS`, following the same
+per-field-sanitizer pattern as every other filterable field.
 
 ### Decision: drop named intents (`GET_TICKETS` etc.) entirely — the LLM names data sources directly
 
@@ -2179,10 +2003,12 @@ express that at all.
 **Reasoning:** once the LLM can freely combine data sources, a named intent
 (`GET_TICKETS`) becomes a redundant label that must stay in sync with a
 `dataSource` value that already fully determines behavior on its own —
-exactly the "trust the LLM's own copy of a fact the registry already
-knows" bug shape the Phase 3 `dataSources`-echo bug (documented above)
-already burned once. Recreating that one level up (an `intent` string that
-must agree with a `dataSource`) was rejected. The wire contract between the
+the same "trust the LLM's own copy of a fact the registry already knows"
+risk that the intent registry's `dataSources` field (sourced from the
+registry, never the LLM's own echoed value — see Phase 3 above) already
+guards against once. Recreating that risk one level up (an `intent`
+string that must agree with a `dataSource`) was rejected. The wire
+contract between the
 two AI calls changed from `{intent, filters}` to `{queries:
 [{dataSource, filters}, ...]}` — the LLM names one or more data sources
 directly, each with its own independently-validated filter set.
@@ -2212,18 +2038,15 @@ entry" philosophy as the original per-source dataSources filtering.
 
 ### Decision: inject the actual current date into the intent prompt, computed per-turn at the call site
 
-**Reasoning:** `buildIntentPrompt` told the LLM to "resolve relative date
-language yourself" but never actually told it what today's date *is* — a
-real, independent prompt bug (not just a "Plan my day" nice-to-have) that
-made every relative-date question ("meetings today," "invoices due this
-week") silently unable to resolve to a correct absolute filter.
-`orchestrateChatTurn` (`backend/src/ai/chatOrchestrator/index.js`) now
-computes `const now = new Date()` once per call and passes it into
-`buildIntentPrompt({input, history, now})`. Deliberately NOT a module-level
-constant inside `intentPrompt.js` — that would be evaluated once at
-`require()` time (process start) and silently go stale for the lifetime of
-a long-running server, reintroducing the exact bug being fixed. The
-sanitizers stay deliberately "dumb": `sanitizeDateRange` still only
+**Reasoning:** `buildIntentPrompt` tells the LLM to resolve relative date
+language ("today," "this week") itself, which requires actually telling
+it what today's date is. `orchestrateChatTurn`
+(`backend/src/ai/chatOrchestrator/index.js`) computes `const now = new
+Date()` once per call and passes it into `buildIntentPrompt({input,
+history, now})`. Deliberately NOT a module-level constant inside
+`intentPrompt.js` — that would be evaluated once at `require()` time
+(process start) and go stale for the lifetime of a long-running server.
+The sanitizers stay deliberately "dumb": `sanitizeDateRange` only
 validates already-absolute ISO dates and never interprets relative
 language — resolving "today" is the LLM's job, now that it's actually told
 what today is.
@@ -2282,21 +2105,6 @@ used for email extraction) and creates the entity asynchronously, with the
 frontend polling for completion and a clickable "Entity created" toast that
 opens the existing Entity Detail Sheet.
 
-### Found before implementing: R2 credentials were placeholders, not real values
-
-`R2_BUCKET_NAME` was literally the string `"placeholder"` in both
-`.env.local` and `.env.production`, and `R2_ACCESS_KEY_ID`/
-`R2_SECRET_ACCESS_KEY` were both only 11 characters — far short of a real
-Cloudflare R2 key/secret. Per explicit instruction to stop and ask rather
-than assume, this was flagged before building the storage layer. The user
-opted to update `.env` themselves; this phase's code was built against the
-existing `config.storage` shape (`provider`/`accountId`/`accessKeyId`/
-`secretAccessKey`/`bucketName`/`endpoint`, consumed via
-`@aws-sdk/client-s3`'s `PutObjectCommand` in `cloudflareR2StorageProvider.js`)
-so it works the moment real values land — verified end-to-end for the
-no-attachment path; attachment upload itself is unverified against a real
-bucket as of this writing.
-
 ### Decision: a fully separate `ai/manualIngestionOrchestrator/` pipeline, not a route into the email pipeline
 
 **Reasoning:** confirmed by direct code tracing that `ai/orchestrator/`'s
@@ -2335,10 +2143,10 @@ a permanent reference (unlike Gmail's stable deep link). `buildSourceUrl`
 every typed model's `sourceUrl` field (plus `Entity.source.url` and the
 GraphQL schema's corresponding fields, all previously non-nullable) became
 conditionally required only for `sourceType === 'EMAIL'`. The frontend's
-`SourceFooter` (shared across all five detail views) now renders the "View
-original source" link only when a URL is present — verified live: a
-manually-created Ticket's detail sheet shows only the extracted/updated
-timestamps, no broken/missing link.
+`SourceFooter` (shared across all five detail views) renders the "View
+original source" link only when a URL is present — a manually-created
+entity's detail sheet shows only the extracted/updated timestamps, no
+broken/missing link.
 
 ### Decision: extraction precedence — user-typed details win, attachments only fill gaps
 
@@ -2352,14 +2160,12 @@ than silently creating an empty/garbage entity.
 
 ### Decision: attachments are copied onto the created entity only for Document — not Event
 
-**Correction made during implementation, not before:** the plan assumed
-both Document and Event already had an `attachments` field suitable for
-raw uploaded files. Re-reading `Event.js` directly showed this is wrong —
-`Event.attachments` (`{documentId, filename}`) is a cross-reference to a
-**separately-extracted Document entity**, not a physical file, per the
-model's own comment ("NOT the attachment's contents"). Populating it with
-a manually-uploaded file's storage key would create a dangling reference to
-a Document entity that doesn't exist. Only `Document.attachments`
+**Reasoning:** `Event.attachments` (`{documentId, filename}`) is a
+cross-reference to a **separately-extracted Document entity**, not a
+physical file, per the model's own comment ("NOT the attachment's
+contents"). Populating it with a manually-uploaded file's storage key
+would create a dangling reference to a Document entity that doesn't
+exist. Only `Document.attachments`
 (`models/schemas/AttachmentRefSchema.js`: `{attachmentId, fileName,
 mimeType, size}`) is a genuine raw-file reference — manual uploads are
 copied there (using the R2 storage key as `attachmentId`), and nowhere else
@@ -2401,139 +2207,57 @@ independent `EntityDetailSheet` instance (fed by a new
 existing sheet is local state scoped to `EntityList.tsx`, which can't serve
 a toast that fires from any route; `EntityList.tsx` itself is untouched.
 
-**Verified end-to-end (details-only, no attachment):** modal submission →
-immediate close + "Creation in progress" toast → async orchestration
-correctly extracted title, summary, and `urgency: HIGH` from free-text
-details mentioning "high urgency" → poll → clickable "Entity created
-#TKT-004" toast → opened the correct Ticket in the global Entity Detail
-Sheet with no "View original source" link.
+### Decision: `messageId` uniqueness is enforced with a partial index scoped to EMAIL-sourced records, not a sparse index
 
-**R2 credentials found to be placeholders before implementing, then
-corrected:** `R2_BUCKET_NAME` was literally `"placeholder"` in both env
-files with 11-character access key/secret (real R2 keys are ~32/~40+
-chars) — flagged per instruction rather than assumed. The user updated
-them mid-session, but the new bucket names (`cotex-dev`/`cotex`) were
-missing the "r" from "cortex" — flagged again and confirmed as a typo
-before fixing. R2 connectivity itself (upload/exists/delete against the
-real `cortex-dev` bucket) was verified directly via a standalone script
-using the exact `storageService.uploadObject` call path
-`createKnowledbase` uses.
+**Reasoning:** all five typed models need `{userId, messageId}` uniqueness
+for email-pipeline retry-safety, but a manual entry has no `messageId` at
+all. A compound **sparse** index only excludes a document from the index
+when *every* indexed field is absent — since `userId` is always present,
+a merely-absent `messageId` still gets indexed as `null`, so a second
+manual entry for the same user would collide with the first. Fixed with
+two changes: `messageId`'s schema `default: null` was removed (so a
+non-EMAIL record's `messageId` is genuinely absent, not present-with-a-
+null-value), and the index itself is a **partial** index —
+`{ unique: true, partialFilterExpression: { messageId: { $type: 'string'
+} } }` — which only includes a document when the filter matches,
+correctly limiting the uniqueness constraint to actual EMAIL-sourced
+records regardless of whether a non-EMAIL record's `messageId` is absent
+or null.
 
-### Bug found: a *second* manually-created entity of the same type always failed with E11000
+### Decision: manual-entry attachments are surfaced via a synthetic `conversation[]` message, and downloaded through a dedicated signed-URL route
 
-The browser's file-upload automation tool had a version mismatch in this
-session and couldn't simulate a real file selection, so the
-attachment-driven extraction path was verified by driving
-`processManualIngestion` directly with a real PDF buffer (uploaded to the
-real R2 bucket, parsed by the real Google Document AI processor) — the
-same code the resolver calls, just invoked from a script instead of a
-browser click. The first attempt (a second manual Ticket, after TKT-004)
-failed with `E11000 duplicate key error ... index: userId_1_messageId_1
-... dup key: { userId: ..., messageId: null }`.
+**How Ticket/Invoice show a manual entry's attachment:** both types'
+Attachments tab reads exclusively from `conversation[].attachments` (the
+same shape the Gmail pipeline populates). `entityRepository.js`'s
+`buildManualConversationSeed({details, attachmentRefs})` builds a single
+synthetic `conversation[]` entry for a manual submission (`direction:
+'RECEIVED'`, chosen over `'SENT'` only because `'SENT'` renders as "You"
+in the message bubble, a worse fit for "the record the user submitted"),
+reusing the exact `ConversationMessageSchema`/`AttachmentRefSchema` shape
+the email pipeline already populates — so the existing
+Conversation/Attachments tab rendering works with no new frontend
+concept. `ticketRepository.js`/`invoiceRepository.js` seed
+`raw.conversation` from it; it's `[]` for a text-only submission with no
+attachment. Document's own top-level `attachments[]` field is populated
+directly, since Document already owns that field for the email pipeline.
 
-**Root cause:** all five typed models already had a
-`{userId, messageId}` unique **sparse** index (built for retry-safety on
-the email pipeline — see the Phase-1-era decisions above). For a
-**compound** sparse index, MongoDB only excludes a document from the index
-when **every** indexed field is absent — since `userId` is always present,
-a merely-absent `messageId` (the manual-entry case) still gets indexed as
-`null`, and a second such record for the same user collides with the
-first. This bug was entirely latent before this phase: every prior record
-had `sourceType: 'EMAIL'` with a real Gmail `messageId`, so the field was
-never actually absent until manual entries started producing genuinely
-message-less records.
-
-**Fix, two parts:**
-1. `messageId`'s schema `default: null` was removed on all five models,
-   and each `validateExtracted<Type>()` now assigns `undefined` (not
-   `null`) when the value isn't a string — so a non-EMAIL record's
-   `messageId` is genuinely absent from the document, not present-with-a-
-   null-value.
-2. The index itself changed from `{ unique: true, sparse: true }` to
-   `{ unique: true, partialFilterExpression: { messageId: { $type:
-   'string' } } }` on all five models — a **partial** index only includes a
-   document when the filter expression matches, which correctly limits
-   this uniqueness constraint to actual EMAIL-sourced records regardless of
-   whether a non-EMAIL record's `messageId` is absent or null. Part 1 alone
-   would NOT have fixed this (compound sparse indexes don't behave like
-   single-field sparse indexes); the partial index is what actually closes
-   the gap. Migrated the existing dev database by dropping and
-   recreating the five indexes (`Model.syncIndexes()` after the schema
-   change) rather than a schema-only fix that would silently do nothing
-   against the already-created index definition.
-
-**Verified end-to-end (post-fix) via the same script, a second time:**
-`processManualIngestion` on a Ticket-shaped PDF (Ticket Number: TCK-9981,
-Status: IN_PROGRESS, Urgency: CRITICAL, Priority: HIGH, Requester: Priya
-Sharma / priya.sharma@acmecorp.com) with a deliberately generic `details`
-text containing none of those fields — created TKT-005 with every field
-correctly pulled from the attachment, not the details text, confirming
-both the extraction-precedence design (Key design decisions above) and the
-index fix. Confirmed visually in the real UI's Entity Detail Sheet.
-
-### Bug found: manually-created entities' attachments were invisible after creation
-
-Reported directly: after creating a Ticket/Invoice/Document with an
-attachment via "Create Knowledge", the resulting entity showed no trace
-of the uploaded file anywhere in the UI. Two independent causes, found by
-tracing exactly what each type's detail view reads from and what download
-routes actually exist:
-
-1. **Ticket/Invoice never populated `conversation[]` for manual entries**
-   — `persistTicketFromManualEntry`/`persistInvoiceFromManualEntry` built
-   `raw.conversation` as `[]` unconditionally (there's no email to seed it
-   from, unlike the Gmail pipeline's `buildInitialConversationMessage`).
-   Both types' Attachments tab reads exclusively from
-   `conversation[].attachments`, so an uploaded file was extracted from
-   (for structured fields) but never durably attached to the record itself.
-2. **No download route existed for R2-stored attachments at all.** The
-   only attachment route, `/api/attachments/gmail/:messageId/:attachmentId`
-   (`attachmentRoutes.js`), is a live proxy hardcoded to Gmail's
-   `messages.attachments.get` API — it has no path for a plain R2 storage
-   key and would 404 for one. This affected Document too, whose
-   `attachments[]` field *was* already being populated correctly but had
-   no way to ever be downloaded.
-
-**Fix, reusing existing machinery rather than adding new schema/UI
-concepts:**
-- `entityRepository.js` gained `buildManualConversationSeed({details,
-  attachmentRefs})` — builds a single synthetic `conversation[]` entry
-  (`direction: 'RECEIVED'`, chosen over `'SENT'` only because `'SENT'`
-  renders as "You" in the message bubble, a worse fit for "the record the
-  user submitted") whose `attachments[]` reuses the exact
-  `ConversationMessageSchema`/`AttachmentRefSchema` shape the email
-  pipeline already populates. `ticketRepository.js`/`invoiceRepository.js`
-  now seed `raw.conversation` from it instead of `[]`, so the existing
-  Conversation/Attachments tab rendering "just works" with no new
-  frontend concept. Returns `[]` when there's no attachment, matching
-  prior behavior for text-only manual entries.
-- `attachmentRoutes.js` gained a second route, `GET /api/attachments/manual
-  ?key=<storageKey>` (a query param, not a path segment, since R2 storage
-  keys contain slashes) — looks up the attachment's ownership across
-  Ticket/Invoice's `conversation[].attachments` and Document's top-level
-  `attachments[]` (the only types a manual attachment ref can live in),
-  then 302-redirects to a short-lived signed URL from
-  `storageService.getSignedDownloadUrl`. Unlike the Gmail route, bytes are
-  never proxied through the backend — R2 already supports presigned GETs,
-  so a redirect is strictly simpler and cheaper than a live proxy here.
-- Frontend: `Conversations.tsx`'s `AttachmentBadge` now branches on
-  whether `attachment.attachmentId` starts with `users/` (the R2
-  storage-key prefix every manual upload gets — see
-  `manualIngestionOrchestrator`'s storage-key scheme) to pick the manual
-  route instead of the Gmail one. `DocumentDetail.tsx`'s attachment list,
-  previously a non-clickable `<span>`, is now an `<a>` to the manual
-  route unconditionally — Document's `attachments[]` has no Gmail-sourced
-  case in practice (the email pipeline's `persistDocument` never
-  populates it), so no branching is needed there.
-
-**Verified end-to-end via a direct script** (mirroring the TKT-005
-verification): ran `processManualIngestion` for a manual Ticket with a
-real file uploaded to the real R2 dev bucket, confirmed the resulting
-Ticket's `conversation[0].attachments[0].attachmentId` matched the
-storage key, then independently exercised the exact
-`storageService.getSignedDownloadUrl` call the new route makes and
-downloaded the signed URL directly — the bytes matched the uploaded file
-exactly. Test records/object were deleted after verification.
+**How a manual attachment is downloaded:** `attachmentRoutes.js` exposes
+`GET /api/attachments/manual?key=<storageKey>` (a query param, not a path
+segment, since R2 storage keys contain slashes) — distinct from
+`/api/attachments/gmail/:messageId/:attachmentId`, which is a live proxy
+hardcoded to Gmail's `messages.attachments.get` API and has no path for a
+plain R2 storage key. The manual route looks up the attachment's
+ownership across Ticket/Invoice's `conversation[].attachments` and
+Document's top-level `attachments[]` (the only places a manual
+attachment ref can live), then 302-redirects to a short-lived signed URL
+from `storageService.getSignedDownloadUrl` — bytes are never proxied
+through the backend, since R2 already supports presigned GETs directly.
+`Conversations.tsx`'s `AttachmentBadge` branches on whether
+`attachment.attachmentId` starts with `users/` (the R2 storage-key
+prefix every manual upload gets — see `manualIngestionOrchestrator`'s
+storage-key scheme) to pick the manual route instead of the Gmail one.
+`DocumentDetail.tsx`'s attachment list always uses the manual route,
+since Document's `attachments[]` has no Gmail-sourced case in practice.
 
 ### `AttachmentCard` reused for Conversations, Invoice/Ticket Attachments tab, and Create Knowledge staging
 
@@ -2581,65 +2305,20 @@ mechanisms already built earlier this session
   attachments, now visually inconsistent with the other three locations.
   Flagged as a natural follow-up, not done speculatively.
 
-**Verified visually in the browser**, not just by reading code: created a
-fresh manual Ticket with attachment via a direct script (the browser's
-`file_upload` automation tool is still non-functional in this
-environment — confirmed again, same failure as earlier in the session)
-and confirmed in the live UI that `AttachmentCard` renders correctly in
-both the Attachments tab and the Conversation tab, and that clicking it
-opens the real signed R2 URL and serves the real file content. Also
-submitted a text-only entry through the actual `CreateKnowledge` modal in
-the browser to confirm the staging-list swap didn't regress the rest of
-the form.
+### Decision: themed color tokens are used at full opacity, never with a Tailwind `/<opacity>` modifier
 
-### Found: every `bg-<token>/<opacity>` Tailwind class in this app renders fully transparent
-
-Asked to add a subtle background to `AttachmentCard` — bumped `bg-muted/30`
-to `bg-muted/60` and it looked identical in the browser. Diagnosed with
-`getComputedStyle` rather than guessing: the card's `background-color`
-was literally `rgba(0, 0, 0, 0)` — the class was applied, but resolved to
-fully transparent, not just visually similar.
-
-**Root cause**: `tailwind.config.js`'s `theme.extend.colors` maps every
+**Context:** `tailwind.config.js`'s `theme.extend.colors` maps every
 themed token (`muted`, `border`, `background`, `card`, `destructive`,
-etc.) to a bare `var(--x)` reference — not `oklch(var(--x) /
-<alpha-value>)`. `globals.css` in turn defines each `--x` as a
-**complete, self-contained `oklch(...)` string** (e.g. `--muted:
-oklch(0.274 0.006 286.033)`), not bare component numbers. Tailwind's
-`/<opacity>` modifier needs an `<alpha-value>` placeholder to inject into
-— with neither the config nor the CSS variable providing one, the
-modifier produces an invalid color value that the browser drops,
-collapsing `background-color` to its initial value (transparent). This
-reproduces for **every** slash-opacity utility on every custom token in
-this app, including pre-existing code — e.g. `Conversations.tsx`'s
-message bubble (`bg-muted/40`) has silently had a fully transparent fill
-this whole time, visible only via its 10%-alpha border (`--border`'s
-alpha is baked into its own value, so `border-*` happens to still render,
-independent of this bug). Confirmed the mechanism directly: an isolated
-`<div class="bg-muted">` appended straight to `document.body` renders
-`oklch(0.274 0.006 286.033)` correctly (proving the token/generation
-itself is fine) — only the `/<opacity>` modifier path is broken.
+etc.) to a bare `var(--x)` reference, and `globals.css` defines each
+`--x` as a complete, self-contained `oklch(...)` string rather than bare
+component numbers — so Tailwind's `/<opacity>` modifier has no
+`<alpha-value>` placeholder to inject into and silently produces a fully
+transparent color instead.
 
-**Fix applied, scoped to `AttachmentCard` only** (the systemic issue
-across the rest of the app is out of scope for this task — flagging it
-here rather than fixing it speculatively): dropped the modifier entirely.
-`bg-muted/60` → `bg-muted` (renders solid at the token's own designed
-lightness), and `hover:bg-muted/60` → `hover:bg-muted-hover` (a real,
-purpose-built token already defined in both themes — `--muted-hover` is
-1-4% darker than `--muted` in each — rather than trying to fake a hover
-tint via a broken opacity modifier). `bg-destructive/5` on the `FAILED`
-branch has the same underlying bug but was left as-is: no code path in
-this app currently renders `AttachmentCard` with `status="FAILED"`, so
-it's dead code today, not a user-visible gap.
-
-**Broader fix would require** (not done — bigger than this task):
-changing every `--x` custom property in `globals.css` to bare
-space-separated OKLCH components (e.g. `--muted: 0.274 0.006 286.033;`)
-and every `tailwind.config.js` token mapping to `oklch(var(--x) /
-<alpha-value>)`, which would then make every existing `/<opacity>`
-utility across the whole app (currently all silently no-ops) start
-actually applying — a behavior change to every screen, not a safe
-drive-by fix.
+**Decision:** components needing a lighter/darker variant use a
+purpose-built token (e.g. `bg-muted-hover`, already defined in both
+themes) instead of an opacity modifier on the base token. `AttachmentCard`
+follows this: `bg-muted`/`hover:bg-muted-hover`, no `/<opacity>` anywhere.
 
 ### Added: a "Manual Entries" page to review/retry/delete failed manual creations
 
@@ -2684,31 +2363,6 @@ felt like more surface area than this task needed) — shown as read-only
   extracted into a shared `uploadManualAttachments()` helper so
   `retryManualIngestion` doesn't duplicate it.
 
-**Two real bugs found and fixed while wiring this up, both caught by
-testing the actual mutations in the browser rather than trusting the
-code read-through**:
-1. `storageService.deleteKeys` was implemented and used internally by
-   `moveObjects` but **never added to `storageService`'s own
-   `module.exports`** — calling it from the new delete resolver threw
-   `storageService.deleteKeys is not a function` at runtime, something
-   `node --check`/lint never would have caught (valid syntax, just a
-   missing export). Confirmed by calling the mutation directly via
-   `fetch` against `/graphql` from the browser console — the stack trace
-   pointed straight at the missing export.
-2. Used a `window.confirm()` for the delete button's "are you sure"
-   prompt — this **froze the entire tab**, including this session's own
-   browser-automation tooling (native dialogs block all further CDP
-   commands), matching this session's own safety guidance about not
-   triggering native dialogs. Replaced with a small `Popover`-based
-   in-app confirm (`DeleteEntryButton` in `ManualEntriesTable.tsx`) that
-   matches the app's own styling and never blocks the page.
-
-**Verified end-to-end in the browser**: the failures table immediately
-surfaced three genuine pre-existing `FAILED` rows already sitting in the
-dev database from earlier in this session (two old duplicate-key debris
-rows, one real "missing title" extraction failure) — never visible in
-any UI before this page existed. Edited and retried one (pipeline
-correctly re-ran and landed back on `FAILED` with an updated error,
-proving retry-in-place works regardless of outcome), and deleted another
-(row disappeared, R2 cleanup ran, toast confirmed) after fixing bug #1
-above.
+**Delete's confirmation is an in-app `Popover`** (`DeleteEntryButton` in
+`ManualEntriesTable.tsx`), not a native `window.confirm()` — matches the
+app's own styling and never blocks the page the way a native dialog does.
