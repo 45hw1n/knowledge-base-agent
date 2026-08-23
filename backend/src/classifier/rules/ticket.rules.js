@@ -47,4 +47,14 @@ module.exports = [
     weight: 0.15,
     test: (email) => /\b(priority|status)\s*:/i.test(email.searchableText),
   },
+  // Cross-cutting trusted-sender bonus, identical across all five rule
+  // sets — see zamp_sender_domain in the other .rules.js files. Small on
+  // purpose: it keeps a zamp email from scoring exactly 0 (and being
+  // silently discarded) without overriding genuine content signal for
+  // whichever type the email actually is.
+  {
+    id: 'zamp_sender_domain',
+    weight: 0.1,
+    test: (email) => /(^|\.)zamp\.[a-z]+$/i.test(email.fromDomain),
+  },
 ];

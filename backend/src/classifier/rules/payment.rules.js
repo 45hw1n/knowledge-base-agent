@@ -29,4 +29,13 @@ module.exports = [
     weight: 0.15,
     test: (email) => /\breceipt\b/i.test(email.subject),
   },
+  // Cross-cutting trusted-sender bonus, identical across all five rule
+  // sets — see ticket.rules.js's zamp_sender_domain for the full
+  // reasoning. Small on purpose: keeps a zamp email from scoring exactly
+  // 0 without overriding genuine content signal for the real type.
+  {
+    id: 'zamp_sender_domain',
+    weight: 0.1,
+    test: (email) => /(^|\.)zamp\.[a-z]+$/i.test(email.fromDomain),
+  },
 ];
