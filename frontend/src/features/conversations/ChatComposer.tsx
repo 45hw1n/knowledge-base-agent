@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
 import { Button } from "@/lib/ui/button";
 
+const MIN_TEXTAREA_HEIGHT_PX = 44;
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
 interface ChatComposerProps {
@@ -28,7 +29,13 @@ export function ChatComposer({ onSend }: ChatComposerProps) {
     const trimmed = value.trim();
     if (!trimmed || sending) return;
     setValue("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    // Reset to an explicit pixel height, not "auto" — a <textarea>'s "auto"
+    // height isn't guaranteed to collapse back down to its single-line size
+    // after JS has set a taller inline height, so leaving it at "auto" here
+    // was the actual cause of the composer creeping taller with every send:
+    // the next input's growth calculation started from whatever height
+    // "auto" happened to leave behind, not from a real baseline.
+    if (textareaRef.current) textareaRef.current.style.height = `${MIN_TEXTAREA_HEIGHT_PX}px`;
 
     setSending(true);
     try {
@@ -50,8 +57,9 @@ export function ChatComposer({ onSend }: ChatComposerProps) {
   const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(event.target.value);
     const el = event.target;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
+    el.style.height = "auto"; // force a reflow so scrollHeight reflects content only, not the previous inline height
+    const nextHeight = Math.min(Math.max(el.scrollHeight, MIN_TEXTAREA_HEIGHT_PX), MAX_TEXTAREA_HEIGHT_PX);
+    el.style.height = `${nextHeight}px`;
   };
 
   return (
@@ -65,6 +73,7 @@ export function ChatComposer({ onSend }: ChatComposerProps) {
           disabled={sending}
           placeholder="Ask about your invoices, tickets, or anything else Cortex has extracted..."
           rows={1}
+          style={{ height: MIN_TEXTAREA_HEIGHT_PX, minHeight: MIN_TEXTAREA_HEIGHT_PX }}
           className="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
         />
         <Button
