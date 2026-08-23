@@ -1,5 +1,5 @@
 import { KeyboardEvent, MouseEvent } from "react";
-import { FileText, Image as ImageIcon, Loader2, RotateCcw, X } from "lucide-react";
+import { Paperclip, Image as ImageIcon, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/lib/ui/button";
 import { cn } from "@/lib/utils";
 import { AttachmentItemStatus } from "@/features/attachments/types";
@@ -54,9 +54,9 @@ export function AttachmentCard({
         "flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-sm",
         status === "FAILED"
           ? "border-destructive/40 bg-destructive/5"
-          : "border-border/60 bg-muted/30",
+          : "border-border/60 bg-muted",
         isSelectable &&
-          "cursor-pointer transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "cursor-pointer transition-colors hover:border-border hover:bg-muted-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       )}
       onClick={isSelectable ? onSelect : undefined}
       onKeyDown={handleKeyDown}
@@ -70,7 +70,7 @@ export function AttachmentCard({
         ) : isImage ? (
           <ImageIcon className="w-4 h-4" />
         ) : (
-          <FileText className="w-4 h-4" />
+          <Paperclip className="w-4 h-4" />
         )}
       </div>
 

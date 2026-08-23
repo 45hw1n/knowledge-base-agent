@@ -2591,3 +2591,52 @@ opens the real signed R2 URL and serves the real file content. Also
 submitted a text-only entry through the actual `CreateKnowledge` modal in
 the browser to confirm the staging-list swap didn't regress the rest of
 the form.
+
+### Found: every `bg-<token>/<opacity>` Tailwind class in this app renders fully transparent
+
+Asked to add a subtle background to `AttachmentCard` — bumped `bg-muted/30`
+to `bg-muted/60` and it looked identical in the browser. Diagnosed with
+`getComputedStyle` rather than guessing: the card's `background-color`
+was literally `rgba(0, 0, 0, 0)` — the class was applied, but resolved to
+fully transparent, not just visually similar.
+
+**Root cause**: `tailwind.config.js`'s `theme.extend.colors` maps every
+themed token (`muted`, `border`, `background`, `card`, `destructive`,
+etc.) to a bare `var(--x)` reference — not `oklch(var(--x) /
+<alpha-value>)`. `globals.css` in turn defines each `--x` as a
+**complete, self-contained `oklch(...)` string** (e.g. `--muted:
+oklch(0.274 0.006 286.033)`), not bare component numbers. Tailwind's
+`/<opacity>` modifier needs an `<alpha-value>` placeholder to inject into
+— with neither the config nor the CSS variable providing one, the
+modifier produces an invalid color value that the browser drops,
+collapsing `background-color` to its initial value (transparent). This
+reproduces for **every** slash-opacity utility on every custom token in
+this app, including pre-existing code — e.g. `Conversations.tsx`'s
+message bubble (`bg-muted/40`) has silently had a fully transparent fill
+this whole time, visible only via its 10%-alpha border (`--border`'s
+alpha is baked into its own value, so `border-*` happens to still render,
+independent of this bug). Confirmed the mechanism directly: an isolated
+`<div class="bg-muted">` appended straight to `document.body` renders
+`oklch(0.274 0.006 286.033)` correctly (proving the token/generation
+itself is fine) — only the `/<opacity>` modifier path is broken.
+
+**Fix applied, scoped to `AttachmentCard` only** (the systemic issue
+across the rest of the app is out of scope for this task — flagging it
+here rather than fixing it speculatively): dropped the modifier entirely.
+`bg-muted/60` → `bg-muted` (renders solid at the token's own designed
+lightness), and `hover:bg-muted/60` → `hover:bg-muted-hover` (a real,
+purpose-built token already defined in both themes — `--muted-hover` is
+1-4% darker than `--muted` in each — rather than trying to fake a hover
+tint via a broken opacity modifier). `bg-destructive/5` on the `FAILED`
+branch has the same underlying bug but was left as-is: no code path in
+this app currently renders `AttachmentCard` with `status="FAILED"`, so
+it's dead code today, not a user-visible gap.
+
+**Broader fix would require** (not done — bigger than this task):
+changing every `--x` custom property in `globals.css` to bare
+space-separated OKLCH components (e.g. `--muted: 0.274 0.006 286.033;`)
+and every `tailwind.config.js` token mapping to `oklch(var(--x) /
+<alpha-value>)`, which would then make every existing `/<opacity>`
+utility across the whole app (currently all silently no-ops) start
+actually applying — a behavior change to every screen, not a safe
+drive-by fix.
