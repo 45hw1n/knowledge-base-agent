@@ -1,7 +1,6 @@
 import { useMutation } from "@apollo/client";
 import { FileWarning, Home, LogOut, MessageCircle } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
-import CortexLogo from "@/assets/cortex-logo.svg";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { LOGOUT } from "@/graphql/query/auth/authQueries";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -80,14 +79,14 @@ export function AppSidebar() {
             "group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
           )}
         >
-          <img
-            src={CortexLogo}
-            alt="Cortex"
+          <span
             className={cn(
-              "h-6 w-auto shrink-0 transition-all duration-200 ease-linear",
+              "truncate text-lg font-semibold tracking-tight transition-all duration-200 ease-linear",
               "group-data-[collapsible=icon]:hidden"
             )}
-          />
+          >
+            Cortex
+          </span>
           <span
             aria-hidden
             className={cn(

@@ -62,21 +62,16 @@ export function LoginForm({
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card className="overflow-hidden">
-        <CardContent className="grid p-0 md:grid-cols-[3fr_4fr]">
-          <div className="relative hidden md:block aspect-[737/1024]">
-            <img
-              src="/images/final-bg.png"
-              alt="Cortex knowledge base"
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-          </div>
-
+        <CardContent className="p-0">
           <form
             className="flex items-center justify-center p-8 md:p-10"
             onSubmit={handleGoogleLogin}
           >
             <div className="flex flex-col gap-8 w-full max-w-sm">
               <div className="flex flex-col items-center text-center gap-2">
+                <span className="text-sm font-semibold tracking-wide text-muted-foreground">
+                  Cortex
+                </span>
                 <h1 className="text-2xl font-bold tracking-tight">
                   Login to Cortex
                 </h1>
