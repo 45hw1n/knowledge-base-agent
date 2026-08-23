@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { GraphQLError, GraphQLScalarType, Kind } = require('graphql');
 const { GraphQLUpload } = require('graphql-upload-minimal');
@@ -19,6 +20,12 @@ const Ticket = require('../models/Ticket');
 const EventModel = require('../models/Event');
 const DocumentModel = require('../models/Document');
 const { serializeForGraphQL } = require('../utils/graphqlSerialize');
+const ManualIngestionItem = require('../models/ManualIngestionItem');
+const { getExtensionForMimeType, DEFAULT_MAX_FILE_SIZE_BYTES } = require('../services/attachments/attachmentValidation');
+const { bufferStream, drainStream } = require('../services/attachments/streamUtils');
+const storageService = require('../services/storage/storageService');
+const { buildManualIngestionStorageKey } = require('../ai/manualIngestionOrchestrator/storageKey');
+const { processManualIngestion } = require('../ai/manualIngestionOrchestrator');
 
 const ENTITY_DETAIL_MODELS = {
     TICKET: { Model: Ticket, typename: 'Ticket' },
@@ -260,6 +267,40 @@ const resolvers = {
                 id: doc._id.toString(),
                 __typename: target.typename,
             };
+        },
+        manualIngestionStatus: async (_, { creationIds }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            // Only ever returns items that have finished processing —
+            // IN_PROGRESS items are simply absent from the response, which
+            // is exactly the "return items whose processing has completed"
+            // contract the polling frontend relies on.
+            const items = await ManualIngestionItem.find({
+                _id: { $in: creationIds },
+                userId: user._id,
+                status: { $ne: 'IN_PROGRESS' },
+            }).lean();
+
+            const entityIds = items.filter((item) => item.entityId).map((item) => item.entityId);
+            const entities = entityIds.length
+                ? await Entity.find({ _id: { $in: entityIds } }).lean()
+                : [];
+            const entityById = new Map(entities.map((entity) => [entity._id.toString(), entity]));
+
+            return items.map((item) => {
+                const entity = item.entityId ? entityById.get(item.entityId.toString()) : null;
+                return {
+                    creationId: item._id.toString(),
+                    status: item.status,
+                    entityId: entity ? entity._id.toString() : null,
+                    entityType: entity ? entity.type : null,
+                    displayId: entity ? entity.displayId : null,
+                    title: entity ? entity.title : null,
+                    error: item.error || null,
+                };
+            });
         },
     },
     EntityDetail: {
@@ -660,6 +701,94 @@ const resolvers = {
                     extensions: { code: error.code || 'INTERNAL_ERROR' }
                 });
             }
+        },
+        // Kept as "createKnowledbase" (not "createKnowledgebase") per naming
+        // instruction. Responds with { creationId, status: 'IN_PROGRESS' }
+        // immediately — the AI pipeline runs detached afterward, same
+        // fire-and-forget pattern as webhookController.js/the chat feature.
+        createKnowledbase: async (_, { input }, { user }) => {
+            if (!user) {
+                throw new GraphQLError('User not authenticated', { extensions: { code: 'UNAUTHORIZED' } });
+            }
+
+            const details = typeof input.details === 'string' ? input.details.trim() : '';
+            if (!details) {
+                throw new GraphQLError('"details" is required and must be a non-empty string', {
+                    extensions: { code: 'VALIDATION_ERROR' },
+                });
+            }
+
+            const manualIngestionItem = await ManualIngestionItem.create({
+                userId: user._id,
+                type: input.type,
+                details,
+                status: 'IN_PROGRESS',
+            });
+
+            const attachmentBuffers = [];
+            const attachmentRefs = [];
+
+            try {
+                for (const filePromise of input.attachments || []) {
+                    const upload = await filePromise;
+
+                    const extension = getExtensionForMimeType(upload.mimetype);
+                    if (!extension) {
+                        // Unsupported type — skipped, not fatal. Attachments
+                        // are optional; details-only extraction still runs.
+                        await drainStream(upload.createReadStream());
+                        continue;
+                    }
+
+                    let buffer;
+                    try {
+                        buffer = await bufferStream(upload.createReadStream(), DEFAULT_MAX_FILE_SIZE_BYTES);
+                    } catch (error) {
+                        continue; // file too large — skipped, same reasoning as above
+                    }
+
+                    const attachmentId = new mongoose.Types.ObjectId().toString();
+                    const storageKey = buildManualIngestionStorageKey({
+                        userId: user._id,
+                        creationId: manualIngestionItem._id,
+                        attachmentId,
+                        extension,
+                    });
+
+                    await storageService.uploadObject({ storageKey, contentType: upload.mimetype, body: buffer });
+
+                    const ref = { storageKey, fileName: upload.filename, mimeType: upload.mimetype, size: buffer.length };
+                    attachmentRefs.push(ref);
+                    attachmentBuffers.push({ ...ref, buffer });
+                }
+            } catch (error) {
+                // An actual infra failure (not a validation skip) — the
+                // submission never got a chance to start processing, so
+                // don't leave an orphaned IN_PROGRESS row behind.
+                await ManualIngestionItem.deleteOne({ _id: manualIngestionItem._id });
+                throw new GraphQLError('Failed to upload attachments', {
+                    extensions: { code: 'ATTACHMENT_UPLOAD_FAILED' },
+                });
+            }
+
+            if (attachmentRefs.length > 0) {
+                await ManualIngestionItem.updateOne(
+                    { _id: manualIngestionItem._id },
+                    { $set: { attachments: attachmentRefs } }
+                );
+            }
+
+            processManualIngestion({
+                manualIngestionItemId: manualIngestionItem._id,
+                userId: user._id,
+                type: input.type,
+                details,
+                attachmentBuffers,
+            }).catch((error) =>
+                console.error('[createKnowledbase] Unhandled error in async manual ingestion processing:', error)
+            );
+
+            return { creationId: manualIngestionItem._id, status: 'IN_PROGRESS' };
         },
     }
 };

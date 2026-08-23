@@ -181,8 +181,8 @@ const typeDefs = gql`
 
   type EntitySource {
     type: String!
-    provider: String!
-    url: String!
+    provider: String
+    url: String
     emailId: ID
     threadId: ID
   }
@@ -271,7 +271,7 @@ const typeDefs = gql`
     issuer: Person
     status: InvoiceStatus!
     conversation: [ConversationMessage!]!
-    sourceUrl: String!
+    sourceUrl: String
     sourceType: String!
     threadId: String
     messageId: String
@@ -296,7 +296,7 @@ const typeDefs = gql`
     payee: Person
     invoiceId: ID
     linkMethod: PaymentLinkMethod
-    sourceUrl: String!
+    sourceUrl: String
     sourceType: String!
     threadId: String
     messageId: String
@@ -336,7 +336,7 @@ const typeDefs = gql`
     conversation: [ConversationMessage!]!
     parentTicketId: ID
     duplicateOfTicketId: ID
-    sourceUrl: String!
+    sourceUrl: String
     sourceType: String!
     threadId: String
     messageId: String
@@ -366,7 +366,7 @@ const typeDefs = gql`
     attendees: [Person!]!
     organizer: Person
     attachments: [EventAttachmentRef!]!
-    sourceUrl: String!
+    sourceUrl: String
     sourceType: String!
     threadId: String
     messageId: String
@@ -406,7 +406,7 @@ const typeDefs = gql`
     effectiveDate: String
     expiryDate: String
     attachments: [AttachmentRef!]!
-    sourceUrl: String!
+    sourceUrl: String
     sourceType: String!
     threadId: String
     messageId: String
@@ -518,6 +518,47 @@ const typeDefs = gql`
     attachmentId: ID!
   }
 
+  """
+  Tracks a user-initiated manual "Create Knowledge" submission from
+  creation through async AI processing (see manualIngestionOrchestrator).
+  """
+  enum ManualIngestionStatus {
+    IN_PROGRESS
+    COMPLETED
+    FAILED
+  }
+
+  input CreateKnowledgebaseInput {
+    type: EntityType!
+    details: String!
+    attachments: [Upload!]
+  }
+
+  type CreateKnowledgebasePayload {
+    creationId: ID!
+    status: ManualIngestionStatus!
+  }
+
+  type ManualIngestionError {
+    code: String!
+    message: String!
+  }
+
+  """
+  entityType/displayId/title are included here (not just entityId) so a
+  client can open the Entity Detail Sheet immediately on completion without
+  a second round trip.
+  """
+  type ManualIngestionStatusResult {
+    creationId: ID!
+    status: ManualIngestionStatus!
+    entityId: ID
+    entityType: EntityType
+    displayId: String
+    title: String
+    error: ManualIngestionError
+  }
+
   type Query {
     hello: String
     ping: String
@@ -533,6 +574,12 @@ const typeDefs = gql`
     entities(input: EntityListRequestInput): EntityListResponse!
     entity(id: ID!): Entity
     entityDetail(id: ID!): EntityDetail
+    """
+    Polling endpoint for pending manual "Create Knowledge" submissions —
+    only ever returns items that have finished processing (COMPLETED or
+    FAILED); an IN_PROGRESS item simply isn't in the response yet.
+    """
+    manualIngestionStatus(creationIds: [ID!]!): [ManualIngestionStatusResult!]!
   }
 
   type Mutation {
@@ -545,6 +592,11 @@ const typeDefs = gql`
     updateUserPreferences(input: UpdateUserPreferencesInput!): UserPreferences!
     uploadAttachments(input: UploadAttachmentsInput!): UploadAttachmentsPayload!
     deleteAttachment(input: DeleteAttachmentInput!): Boolean!
+    """
+    Kept as "createKnowledbase" (not "createKnowledgebase") per naming
+    instruction.
+    """
+    createKnowledbase(input: CreateKnowledgebaseInput!): CreateKnowledgebasePayload!
   }
 `;
 
