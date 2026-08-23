@@ -230,7 +230,7 @@ later phase, not by regex.
 **Reasoning:** The instruction was explicit: "connect emails to threads" and
 "add idempotency," but also "do not implement the entire ingestion pipeline
 yet" and don't rewrite working infrastructure unnecessarily. The live
-`syncEmailsService.js` → `DebitEmailToProcess` path is deployed and working
+`syncEmailsService.js` → `EmailToProcess` path is deployed and working
 today. Rather than modify that production path for a partial feature, this
 phase built `EmailThread` (model) + `threadService.findOrCreateThread()`
 (service) as a complete, independently tested unit, ready to be called from
@@ -350,7 +350,7 @@ never touches this field.
 
 ### Decision: Source URL is durable — stored on Entity, not derived from the temporary email record
 
-**Reasoning:** The `emails` record (not yet implemented; `DebitEmailToProcess`
+**Reasoning:** The `emails` record (not yet implemented; `EmailToProcess`
 stands in for it today) is retained for only 30 days and then deleted via
 TTL. If `source.url` were computed on read by joining against that record,
 the "visit source" link would silently stop working after 30 days even
@@ -758,7 +758,7 @@ standalone, tested pieces.
 ### Decision: `threadId`/`messageId` are raw provider strings, not internal ObjectId refs — a deliberate divergence from `Entity.source`
 
 **Context:** `Entity.source.threadId`/`source.emailId` (built two phases
-ago) are Mongoose `ref`s to internal `EmailThread`/`DebitEmailToProcess`
+ago) are Mongoose `ref`s to internal `EmailThread`/`EmailToProcess`
 documents. This phase's spec instead describes reconciliation as direct
 equality — `Invoice.threadId === newEmail.threadId` — against Gmail's own
 raw thread/message id strings.
@@ -771,7 +771,7 @@ would even be possible — resolving a raw Gmail id to our internal
 benefit over comparing the raw strings directly. `threadId`/`messageId` on
 Invoice, Payment, and (retroactively) Event/Document are therefore plain
 strings holding the same raw values as `EmailThread.providerThreadId` and
-`DebitEmailToProcess.messageId` — not `ref`s. **Flagging this explicitly**:
+`EmailToProcess.messageId` — not `ref`s. **Flagging this explicitly**:
 this is a real inconsistency with `Entity.source`'s design, not an
 oversight — an internal-ref lookup is still one query away whenever
 actually needed (`EmailThread.findOne({ userId, providerThreadId: doc.threadId })`).
@@ -849,16 +849,16 @@ Payment has no equivalent described need — a Payment already carries its
 own `sourceUrl`/`threadId`/`messageId` provenance; there's no described use
 case for it to separately accumulate a conversation log.
 
-### Decision: The message-tracking/idempotency requirement is already fully satisfied by the existing `DebitEmailToProcess` design — no new tracking collection was built
+### Decision: The message-tracking/idempotency requirement is already fully satisfied by the existing `EmailToProcess` design — no new tracking collection was built
 
 **Investigation, not assumption:** Traced `syncEmailsService.js` end to
-end. `DebitEmailToProcess` is created for **every** synced Gmail message
+end. `EmailToProcess` is created for **every** synced Gmail message
 before classification/extraction happens — including messages that produce
 no entity at all ("I'll get back to you tomorrow") — via a unique index on
 `messageId`. `saveEmailToProcess()` already catches MongoDB's `E11000`
 duplicate-key error and logs "already queued" without throwing or creating
 a duplicate; `syncHistorySince()` additionally pre-checks
-`DebitEmailToProcess.exists({ messageId })` before even fetching the
+`EmailToProcess.exists({ messageId })` before even fetching the
 message from Gmail, purely as a fetch-avoidance optimization — the actual
 correctness guarantee is the unique index, not this pre-check (a race
 between two concurrent calls is resolved by the database, not the
@@ -1318,13 +1318,13 @@ having their own "TKT-001" is expected and correct, not a collision.
 
 ---
 
-## Wiring the classifier into live ingestion + DebitEmail→Email rename
+## Wiring the classifier into live ingestion
 
 ### Decision: `classifier.classify()` is now the ingestion gate — an email is only persisted if it matches at least one rule set
 
 **Context:** Every prior phase built the classifier, `EmailThread`, and all
 five typed entities as pure, tested, standalone pieces, explicitly *not*
-wired into the live `syncEmailsService.js` → `DebitEmailToProcess` path
+wired into the live `syncEmailsService.js` → `EmailToProcess` path
 (flagged repeatedly: "if the intent was actually to wire this into the
 live pipeline right now, say so"). That instruction has now been given.
 This phase is step one of that wiring — ingestion and storage only, not
@@ -1339,7 +1339,7 @@ orchestrator phase can consume the classifier's output without
 reclassifying.
 
 **Flagged deviation from the existing message-tracking design:** the
-Invoice/Payment phase established `DebitEmailToProcess` as the global,
+Invoice/Payment phase established `EmailToProcess` as the global,
 "track every synced message, even ones producing no entity" dedup
 mechanism specifically so duplicate webhook/history-sync deliveries are
 caught by the unique index on `messageId`. Gating storage on classifier
@@ -1370,28 +1370,6 @@ orchestrator can later do the cheap, deterministic half itself
 making the AI relevance call. No new ingestion-side lookup was added for
 this — there's nothing to gain by pre-computing it before an orchestrator
 exists to consume it.
-
-### Decision: renamed `DebitEmailToProcess`/`debitEmailProcessorService`/`debitEmailsToProcess` (and `AppStatus`'s `debitProcessingInProgress`/`lastDebitAIProcess*` fields) to generic `Email*` names
-
-**Reasoning:** These names are leftovers from this codebase's origin as an
-"Expense tracker" (see `ab55a47`) — before the finance-specific modules
-were removed and the project became a generic knowledge-base pipeline.
-`syncEmailsService.js` already had a comment admitting this ("Cortex has
-no finance-specific ingestion filter"). Renamed to
-`EmailToProcess`/`emailProcessorService`/`emailsToProcess` (collection)/
-`processEmails`/`getEmailsToProcess`/`getEmailsToProcessByStatus`, and
-`AppStatus.emailProcessingInProgress`/`lastEmailAIProcess*`, across the
-model, service, GraphQL schema/resolvers, and the one frontend component
-that calls them (`ProcessDebitEmailAlert.tsx` → `ProcessEmailAlert.tsx`,
-including fixing its copy, which still said "transaction emails" /
-"synced to your Google Sheet" — stale text from the same finance-era
-origin, unrelated to what Cortex actually does).
-
-**No data migration:** the old `debitEmailsToProcess` collection is
-30-day TTL and `AI_PROVIDER=mock` everywhere today (local and production
-env files) — there is no real extraction traffic to preserve. Old
-documents simply expire under their existing TTL; new ones land in the
-renamed `emailsToProcess` collection.
 
 ### Deliberately cut in this phase
 
