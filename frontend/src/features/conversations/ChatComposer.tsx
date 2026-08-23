@@ -63,7 +63,7 @@ export function ChatComposer({ onSend }: ChatComposerProps) {
   };
 
   return (
-    <div className="border-t bg-background p-4">
+    <div className="bg-background px-4 pt-4 pb-6">
       <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border bg-card p-2 shadow-sm">
         <textarea
           ref={textareaRef}
