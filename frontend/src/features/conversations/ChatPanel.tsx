@@ -106,14 +106,19 @@ export function ChatPanel({ conversationId, onOpenHistory }: ChatPanelProps) {
           </div>
         </div>
       ) : (
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {conversation.messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Send a message to get started.</p>
-          ) : (
-            conversation.messages.map((message) => (
-              <MessageBubble key={message.id} message={message} onRefresh={message.id === trackedMessageId ? poll.refresh : undefined} />
-            ))
-          )}
+        <div className="flex-1 overflow-y-auto p-4">
+          {/* Capped at the same max-w-3xl/mx-auto as ChatComposer below, so
+              the message thread reads as one centered column instead of
+              stretching edge-to-edge in a wide chat panel. */}
+          <div className="mx-auto w-full max-w-3xl space-y-4">
+            {conversation.messages.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Send a message to get started.</p>
+            ) : (
+              conversation.messages.map((message) => (
+                <MessageBubble key={message.id} message={message} onRefresh={message.id === trackedMessageId ? poll.refresh : undefined} />
+              ))
+            )}
+          </div>
         </div>
       )}
 
