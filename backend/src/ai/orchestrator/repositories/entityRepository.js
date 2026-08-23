@@ -121,4 +121,43 @@ async function buildInitialConversationMessage({ userId, emailDoc }) {
     return message;
 }
 
-module.exports = { createEntityForTypedChild, buildInitialConversationMessage };
+/**
+ * Creates the Entity registry row for a typed child produced by the manual
+ * "Create Knowledge" flow (manualIngestionOrchestrator), not the Gmail sync
+ * pipeline — no emailDoc, no Gmail thread lookup, no source URL (a manual
+ * entry has no durable original document to link back to; see
+ * sourceUrlService.js's MANUAL case). Every submission is a new record, so
+ * unlike createEntityForTypedChild there's no messageId to key an
+ * idempotency lookup on — this always creates.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {string} params.type - one of Entity.ENTITY_TYPES
+ * @param {string} params.title
+ * @param {ObjectId} params.entityId - the typed child's _id
+ * @returns {Promise<import('mongoose').Document>}
+ */
+async function createEntityForManualEntry({ userId, type, title, entityId }) {
+    const displayId = await generateDisplayId({ userId, type });
+
+    return Entity.create({
+        userId,
+        type,
+        displayId,
+        title,
+        source: {
+            type: 'MANUAL',
+            provider: 'MANUAL',
+            url: null,
+        },
+        entityId,
+        extraction: {
+            status: 'SUCCESS',
+            model: null,
+            confidence: null,
+            extractedAt: new Date(),
+        },
+    });
+}
+
+module.exports = { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry };

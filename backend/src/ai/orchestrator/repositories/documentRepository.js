@@ -1,7 +1,7 @@
 const Document = require('../../../models/Document');
 const { validateExtractedDocument } = Document;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('./entityRepository');
+const { createEntityForTypedChild, createEntityForManualEntry } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
@@ -109,4 +109,48 @@ async function findDocumentsByFilters({ userId, filters = {} }) {
     }
 }
 
-module.exports = { persistDocument, findDocumentsByFilters };
+/**
+ * Persists a Document from the manual "Create Knowledge" flow — see
+ * ticketRepository.js's persistTicketFromManualEntry for the shared
+ * reasoning. Unlike Ticket/Invoice/Payment/Event, Document.attachments
+ * (models/schemas/AttachmentRefSchema.js: {attachmentId, fileName,
+ * mimeType, size}) is a genuine reference to a raw uploaded file — not a
+ * cross-reference to another entity — so uploaded attachments ARE copied
+ * onto the created Document, using their R2 storage key as attachmentId.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {object} params.extracted
+ * @param {string} [params.summary]
+ * @param {Array<{storageKey:string, fileName:string, mimeType:string, size:number}>} [params.attachmentRefs]
+ * @returns {Promise<{ document: object|null, entity: object|null, error: string|null }>}
+ */
+async function persistDocumentFromManualEntry({ userId, extracted, summary, attachmentRefs = [] }) {
+    const raw = {
+        ...extracted,
+        sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
+        sourceType: 'DOCUMENT',
+        threadId: null,
+        messageId: null,
+        metadata: summary ? { summary } : {},
+        attachments: attachmentRefs.map((ref) => ({
+            attachmentId: ref.storageKey,
+            fileName: ref.fileName,
+            mimeType: ref.mimeType,
+            size: ref.size,
+        })),
+    };
+
+    const { document: validated, error } = validateExtractedDocument(raw);
+    if (error) return { document: null, entity: null, error };
+
+    const document = await Document.create({ userId, ...validated });
+
+    const entity = await createEntityForManualEntry({
+        userId, type: 'DOCUMENT', title: document.title, entityId: document._id,
+    });
+
+    return { document, entity, error: null };
+}
+
+module.exports = { persistDocument, findDocumentsByFilters, persistDocumentFromManualEntry };

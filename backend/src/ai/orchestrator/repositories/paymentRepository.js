@@ -4,7 +4,7 @@ const Invoice = require('../../../models/Invoice');
 const { determineInvoiceStatus } = Invoice;
 const { findMatchingInvoice, determineLinkMethod } = require('../../../services/paymentReconciliationService');
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('./entityRepository');
+const { createEntityForTypedChild, createEntityForManualEntry } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 function buildPaymentTitle(payment) {
@@ -175,4 +175,50 @@ async function findPaymentsByFilters({ userId, filters = {} }) {
     }
 }
 
-module.exports = { persistPayment, buildPaymentTitle, autoLinkBySameThread, findPaymentsByFilters };
+/**
+ * Persists a Payment from the manual "Create Knowledge" flow — see
+ * ticketRepository.js's persistTicketFromManualEntry for the shared
+ * reasoning. `paidAt` falls back to submission time (not an email's Date
+ * header, which doesn't exist here) if extraction found no explicit date —
+ * same "never reject when a reasonable fallback exists" principle as the
+ * email pipeline's own fallback. Not auto-linked to an Invoice (that
+ * matching is thread-based, and a manual entry has no thread).
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {object} params.extracted
+ * @param {string} [params.summary]
+ * @returns {Promise<{ payment: object|null, entity: object|null, error: string|null }>}
+ */
+async function persistPaymentFromManualEntry({ userId, extracted, summary }) {
+    const paidAt = extracted?.paidAt || new Date().toISOString();
+
+    const raw = {
+        ...extracted,
+        paidAt,
+        sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
+        sourceType: 'DOCUMENT',
+        threadId: null,
+        messageId: null,
+        metadata: summary ? { summary } : {},
+    };
+
+    const { payment: validated, error } = validateExtractedPayment(raw);
+    if (error) return { payment: null, entity: null, error };
+
+    const payment = await Payment.create({ userId, ...validated });
+
+    const entity = await createEntityForManualEntry({
+        userId, type: 'PAYMENT', title: buildPaymentTitle(payment), entityId: payment._id,
+    });
+
+    return { payment, entity, error: null };
+}
+
+module.exports = {
+    persistPayment,
+    buildPaymentTitle,
+    autoLinkBySameThread,
+    findPaymentsByFilters,
+    persistPaymentFromManualEntry,
+};

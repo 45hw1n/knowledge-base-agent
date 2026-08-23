@@ -1,7 +1,7 @@
 const Ticket = require('../../../models/Ticket');
 const { validateExtractedTicket } = Ticket;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
@@ -102,4 +102,38 @@ async function findTicketsByFilters({ userId, filters = {} }) {
     }
 }
 
-module.exports = { persistTicket, findTicketsByFilters };
+/**
+ * Persists a Ticket from the manual "Create Knowledge" flow — no emailDoc,
+ * no messageId to key an idempotency lookup on (every submission is a new
+ * record), sourceType DOCUMENT, no conversation seed. See
+ * manualIngestionOrchestrator/index.js and decisions.md.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {object} params.extracted - merged structured fields (details text + attachments)
+ * @param {string} [params.summary]
+ * @returns {Promise<{ ticket: object|null, entity: object|null, error: string|null }>}
+ */
+async function persistTicketFromManualEntry({ userId, extracted, summary }) {
+    const raw = {
+        ...extracted,
+        sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
+        sourceType: 'DOCUMENT',
+        threadId: null,
+        messageId: null,
+        metadata: summary ? { summary } : {},
+    };
+
+    const { ticket: validated, error } = validateExtractedTicket(raw);
+    if (error) return { ticket: null, entity: null, error };
+
+    const ticket = await Ticket.create({ userId, ...validated });
+
+    const entity = await createEntityForManualEntry({
+        userId, type: 'TICKET', title: ticket.title, entityId: ticket._id,
+    });
+
+    return { ticket, entity, error: null };
+}
+
+module.exports = { persistTicket, findTicketsByFilters, persistTicketFromManualEntry };

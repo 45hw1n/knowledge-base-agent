@@ -1,7 +1,7 @@
 const Invoice = require('../../../models/Invoice');
 const { validateExtractedInvoice } = Invoice;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild, buildInitialConversationMessage } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 function buildInvoiceTitle(invoice) {
@@ -123,4 +123,37 @@ async function findInvoicesByFilters({ userId, filters = {} }) {
     }
 }
 
-module.exports = { persistInvoice, buildInvoiceTitle, findInvoicesByFilters };
+/**
+ * Persists an Invoice from the manual "Create Knowledge" flow — see
+ * ticketRepository.js's persistTicketFromManualEntry for the shared
+ * reasoning (no emailDoc, no idempotency lookup, sourceType DOCUMENT).
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {object} params.extracted
+ * @param {string} [params.summary]
+ * @returns {Promise<{ invoice: object|null, entity: object|null, error: string|null }>}
+ */
+async function persistInvoiceFromManualEntry({ userId, extracted, summary }) {
+    const raw = {
+        ...extracted,
+        sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
+        sourceType: 'DOCUMENT',
+        threadId: null,
+        messageId: null,
+        metadata: summary ? { summary } : {},
+    };
+
+    const { invoice: validated, error } = validateExtractedInvoice(raw);
+    if (error) return { invoice: null, entity: null, error };
+
+    const invoice = await Invoice.create({ userId, ...validated });
+
+    const entity = await createEntityForManualEntry({
+        userId, type: 'INVOICE', title: buildInvoiceTitle(invoice), entityId: invoice._id,
+    });
+
+    return { invoice, entity, error: null };
+}
+
+module.exports = { persistInvoice, buildInvoiceTitle, findInvoicesByFilters, persistInvoiceFromManualEntry };

@@ -1,7 +1,7 @@
 const Event = require('../../../models/Event');
 const { validateExtractedEvent } = Event;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild } = require('./entityRepository');
+const { createEntityForTypedChild, createEntityForManualEntry } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
@@ -103,4 +103,46 @@ async function findEventsByFilters({ userId, filters = {} }) {
     }
 }
 
-module.exports = { persistEvent, findEventsByFilters };
+/**
+ * Persists an Event from the manual "Create Knowledge" flow — see
+ * ticketRepository.js's persistTicketFromManualEntry for the shared
+ * reasoning. Unlike Payment's paidAt, `startTime` gets NO fallback default
+ * here if extraction can't find one — synthesizing "now" for an event's
+ * start time would misleadingly imply it's happening right now, whereas a
+ * settlement date defaulting to submission time is a reasonable read of
+ * "the user just told us about a payment." A missing startTime surfaces as
+ * a genuine FAILED result, prompting the user to be more specific.
+ * Uploaded attachments are extraction input only — Event.attachments
+ * references a separately-extracted Document *entity* (documentId), not a
+ * raw file, so it is never populated from a manual upload. See Event.js
+ * and decisions.md.
+ *
+ * @param {object} params
+ * @param {string|ObjectId} params.userId
+ * @param {object} params.extracted
+ * @param {string} [params.summary]
+ * @returns {Promise<{ event: object|null, entity: object|null, error: string|null }>}
+ */
+async function persistEventFromManualEntry({ userId, extracted, summary }) {
+    const raw = {
+        ...extracted,
+        sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
+        sourceType: 'DOCUMENT',
+        threadId: null,
+        messageId: null,
+        metadata: summary ? { summary } : {},
+    };
+
+    const { event: validated, error } = validateExtractedEvent(raw);
+    if (error) return { event: null, entity: null, error };
+
+    const event = await Event.create({ userId, ...validated });
+
+    const entity = await createEntityForManualEntry({
+        userId, type: 'EVENT', title: event.title, entityId: event._id,
+    });
+
+    return { event, entity, error: null };
+}
+
+module.exports = { persistEvent, findEventsByFilters, persistEventFromManualEntry };
