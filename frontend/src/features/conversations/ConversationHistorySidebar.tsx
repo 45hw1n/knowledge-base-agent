@@ -57,19 +57,12 @@ export function ConversationHistorySidebar({
   const listContent = (
     <div className="flex h-full min-w-0 flex-col">
       <div className="flex items-center justify-between gap-2 p-3">
-        <span className="text-sm font-semibold">Conversations</span>
+        <span className="text-sm font-semibold">Recent Conversations</span>
         {isMobile && (
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onMobileOpenChange(false)}>
             <X className="h-4 w-4" />
           </Button>
         )}
-      </div>
-
-      <div className="px-3">
-        <Button className="w-full justify-start gap-2" variant="outline" onClick={handleNewConversation}>
-          <SquarePen className="h-4 w-4" />
-          New conversation
-        </Button>
       </div>
 
       <div className="mt-3 min-w-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
@@ -90,6 +83,14 @@ export function ConversationHistorySidebar({
             </button>
           ))
         )}
+      </div>
+
+
+      <div className="p-3">
+        <Button className="w-full justify-start gap-2" variant="outline" onClick={handleNewConversation}>
+          <SquarePen className="h-4 w-4" />
+          New conversation
+        </Button>
       </div>
     </div>
   );
