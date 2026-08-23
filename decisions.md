@@ -2470,3 +2470,67 @@ text containing none of those fields — created TKT-005 with every field
 correctly pulled from the attachment, not the details text, confirming
 both the extraction-precedence design (Key design decisions above) and the
 index fix. Confirmed visually in the real UI's Entity Detail Sheet.
+
+### Bug found: manually-created entities' attachments were invisible after creation
+
+Reported directly: after creating a Ticket/Invoice/Document with an
+attachment via "Create Knowledge", the resulting entity showed no trace
+of the uploaded file anywhere in the UI. Two independent causes, found by
+tracing exactly what each type's detail view reads from and what download
+routes actually exist:
+
+1. **Ticket/Invoice never populated `conversation[]` for manual entries**
+   — `persistTicketFromManualEntry`/`persistInvoiceFromManualEntry` built
+   `raw.conversation` as `[]` unconditionally (there's no email to seed it
+   from, unlike the Gmail pipeline's `buildInitialConversationMessage`).
+   Both types' Attachments tab reads exclusively from
+   `conversation[].attachments`, so an uploaded file was extracted from
+   (for structured fields) but never durably attached to the record itself.
+2. **No download route existed for R2-stored attachments at all.** The
+   only attachment route, `/api/attachments/gmail/:messageId/:attachmentId`
+   (`attachmentRoutes.js`), is a live proxy hardcoded to Gmail's
+   `messages.attachments.get` API — it has no path for a plain R2 storage
+   key and would 404 for one. This affected Document too, whose
+   `attachments[]` field *was* already being populated correctly but had
+   no way to ever be downloaded.
+
+**Fix, reusing existing machinery rather than adding new schema/UI
+concepts:**
+- `entityRepository.js` gained `buildManualConversationSeed({details,
+  attachmentRefs})` — builds a single synthetic `conversation[]` entry
+  (`direction: 'RECEIVED'`, chosen over `'SENT'` only because `'SENT'`
+  renders as "You" in the message bubble, a worse fit for "the record the
+  user submitted") whose `attachments[]` reuses the exact
+  `ConversationMessageSchema`/`AttachmentRefSchema` shape the email
+  pipeline already populates. `ticketRepository.js`/`invoiceRepository.js`
+  now seed `raw.conversation` from it instead of `[]`, so the existing
+  Conversation/Attachments tab rendering "just works" with no new
+  frontend concept. Returns `[]` when there's no attachment, matching
+  prior behavior for text-only manual entries.
+- `attachmentRoutes.js` gained a second route, `GET /api/attachments/manual
+  ?key=<storageKey>` (a query param, not a path segment, since R2 storage
+  keys contain slashes) — looks up the attachment's ownership across
+  Ticket/Invoice's `conversation[].attachments` and Document's top-level
+  `attachments[]` (the only types a manual attachment ref can live in),
+  then 302-redirects to a short-lived signed URL from
+  `storageService.getSignedDownloadUrl`. Unlike the Gmail route, bytes are
+  never proxied through the backend — R2 already supports presigned GETs,
+  so a redirect is strictly simpler and cheaper than a live proxy here.
+- Frontend: `Conversations.tsx`'s `AttachmentBadge` now branches on
+  whether `attachment.attachmentId` starts with `users/` (the R2
+  storage-key prefix every manual upload gets — see
+  `manualIngestionOrchestrator`'s storage-key scheme) to pick the manual
+  route instead of the Gmail one. `DocumentDetail.tsx`'s attachment list,
+  previously a non-clickable `<span>`, is now an `<a>` to the manual
+  route unconditionally — Document's `attachments[]` has no Gmail-sourced
+  case in practice (the email pipeline's `persistDocument` never
+  populates it), so no branching is needed there.
+
+**Verified end-to-end via a direct script** (mirroring the TKT-005
+verification): ran `processManualIngestion` for a manual Ticket with a
+real file uploaded to the real R2 dev bucket, confirmed the resulting
+Ticket's `conversation[0].attachments[0].attachmentId` matched the
+storage key, then independently exercised the exact
+`storageService.getSignedDownloadUrl` call the new route makes and
+downloaded the signed URL directly — the bytes matched the uploaded file
+exactly. Test records/object were deleted after verification.

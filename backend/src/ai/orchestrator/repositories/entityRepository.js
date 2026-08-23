@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Entity = require('../../../models/Entity');
 const { generateDisplayId } = require('../../../services/displayIdService');
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
@@ -160,4 +161,46 @@ async function createEntityForManualEntry({ userId, type, title, entityId }) {
     });
 }
 
-module.exports = { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry };
+/**
+ * Builds a single synthetic `conversation[]` entry representing a manual
+ * "Create Knowledge" submission, for the two typed children that have no
+ * top-level attachments field of their own (Ticket/Invoice) — reuses the
+ * exact same ConversationMessageSchema shape and rendering the email
+ * pipeline already has, so uploaded files are visible/downloadable via the
+ * existing Conversation/Attachments tab without inventing a new UI concept.
+ * Returns `[]` when there's nothing to attach — a manual entry with no
+ * upload gets no conversation seed at all, matching prior behavior.
+ *
+ * `direction: 'RECEIVED'` even though nothing was actually "received" —
+ * the alternative (SENT) would render as "You" in the message bubble,
+ * which is a worse fit for "the record the user submitted."
+ *
+ * @param {object} params
+ * @param {string} params.details
+ * @param {Array<{storageKey:string, fileName:string, mimeType:string, size:number}>} [params.attachmentRefs]
+ * @returns {Array<object>}
+ */
+function buildManualConversationSeed({ details, attachmentRefs = [] }) {
+    if (attachmentRefs.length === 0) return [];
+
+    return [{
+        messageId: `manual-${new mongoose.Types.ObjectId().toString()}`,
+        direction: 'RECEIVED',
+        content: details,
+        timestamp: new Date(),
+        sender: null,
+        attachments: attachmentRefs.map((ref) => ({
+            attachmentId: ref.storageKey,
+            fileName: ref.fileName,
+            mimeType: ref.mimeType,
+            size: ref.size,
+        })),
+    }];
+}
+
+module.exports = {
+    createEntityForTypedChild,
+    buildInitialConversationMessage,
+    createEntityForManualEntry,
+    buildManualConversationSeed,
+};

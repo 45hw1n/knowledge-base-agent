@@ -133,7 +133,7 @@ async function processManualIngestion({ manualIngestionItemId, userId, type, det
       size: attachment.size,
     }));
 
-    const { entity, error: persistError } = await persist({ userId, extracted: merged, summary, attachmentRefs });
+    const { entity, error: persistError } = await persist({ userId, extracted: merged, details, summary, attachmentRefs });
     if (persistError) {
       await markFailed(manualIngestionItemId, 'INVALID_EXTRACTION', persistError);
       return;

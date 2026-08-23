@@ -1,7 +1,7 @@
 const Ticket = require('../../../models/Ticket');
 const { validateExtractedTicket } = Ticket;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry, buildManualConversationSeed } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 /**
@@ -105,16 +105,26 @@ async function findTicketsByFilters({ userId, filters = {} }) {
 /**
  * Persists a Ticket from the manual "Create Knowledge" flow — no emailDoc,
  * no messageId to key an idempotency lookup on (every submission is a new
- * record), sourceType DOCUMENT, no conversation seed. See
- * manualIngestionOrchestrator/index.js and decisions.md.
+ * record), sourceType DOCUMENT. See manualIngestionOrchestrator/index.js
+ * and decisions.md.
+ *
+ * Ticket has no top-level attachments field (unlike Document) — uploaded
+ * files are made visible/downloadable the same way an email pipeline
+ * attachment is: seeded into `conversation[]` as one synthetic message, so
+ * the existing Conversation/Attachments tab rendering and the
+ * `/api/attachments/manual` download route (attachmentRoutes.js) work
+ * without any new UI concept. Only built when there's actually an
+ * attachment — a manual entry with no upload gets no conversation seed.
  *
  * @param {object} params
  * @param {string|ObjectId} params.userId
  * @param {object} params.extracted - merged structured fields (details text + attachments)
+ * @param {string} params.details - the user's original free-text submission
  * @param {string} [params.summary]
+ * @param {Array<{storageKey:string, fileName:string, mimeType:string, size:number}>} [params.attachmentRefs]
  * @returns {Promise<{ ticket: object|null, entity: object|null, error: string|null }>}
  */
-async function persistTicketFromManualEntry({ userId, extracted, summary }) {
+async function persistTicketFromManualEntry({ userId, extracted, details, summary, attachmentRefs = [] }) {
     const raw = {
         ...extracted,
         sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
@@ -122,6 +132,7 @@ async function persistTicketFromManualEntry({ userId, extracted, summary }) {
         threadId: null,
         messageId: null,
         metadata: summary ? { summary } : {},
+        conversation: buildManualConversationSeed({ details, attachmentRefs }),
     };
 
     const { ticket: validated, error } = validateExtractedTicket(raw);

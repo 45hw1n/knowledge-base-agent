@@ -1,7 +1,7 @@
 const Invoice = require('../../../models/Invoice');
 const { validateExtractedInvoice } = Invoice;
 const { buildSourceUrl } = require('../../../services/sourceUrlService');
-const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry } = require('./entityRepository');
+const { createEntityForTypedChild, buildInitialConversationMessage, createEntityForManualEntry, buildManualConversationSeed } = require('./entityRepository');
 const { MAX_RESULTS, escapeRegExp, attachEntityMetadata } = require('./queryHelpers');
 
 function buildInvoiceTitle(invoice) {
@@ -126,15 +126,19 @@ async function findInvoicesByFilters({ userId, filters = {} }) {
 /**
  * Persists an Invoice from the manual "Create Knowledge" flow — see
  * ticketRepository.js's persistTicketFromManualEntry for the shared
- * reasoning (no emailDoc, no idempotency lookup, sourceType DOCUMENT).
+ * reasoning (no emailDoc, no idempotency lookup, sourceType DOCUMENT) and
+ * for why uploaded attachments are seeded into `conversation[]` rather
+ * than a top-level field (Invoice has none, like Ticket).
  *
  * @param {object} params
  * @param {string|ObjectId} params.userId
  * @param {object} params.extracted
+ * @param {string} params.details - the user's original free-text submission
  * @param {string} [params.summary]
+ * @param {Array<{storageKey:string, fileName:string, mimeType:string, size:number}>} [params.attachmentRefs]
  * @returns {Promise<{ invoice: object|null, entity: object|null, error: string|null }>}
  */
-async function persistInvoiceFromManualEntry({ userId, extracted, summary }) {
+async function persistInvoiceFromManualEntry({ userId, extracted, details, summary, attachmentRefs = [] }) {
     const raw = {
         ...extracted,
         sourceUrl: buildSourceUrl({ provider: 'MANUAL' }),
@@ -142,6 +146,7 @@ async function persistInvoiceFromManualEntry({ userId, extracted, summary }) {
         threadId: null,
         messageId: null,
         metadata: summary ? { summary } : {},
+        conversation: buildManualConversationSeed({ details, attachmentRefs }),
     };
 
     const { invoice: validated, error } = validateExtractedInvoice(raw);

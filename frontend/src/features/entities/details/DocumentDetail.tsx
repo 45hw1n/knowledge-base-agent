@@ -1,6 +1,8 @@
 import { Paperclip } from "lucide-react";
 import { Badge } from "@/lib/ui/badge";
+import config from "@/lib/config";
 import type { KnowledgeDocument } from "@/mocks/entities.types";
+import { formatBytes } from "./Conversations";
 import { formatDate } from "./format";
 import { DetailField, DetailGrid, SectionHeading } from "./shared";
 
@@ -47,13 +49,17 @@ export function DocumentDetail({ doc }: { doc: KnowledgeDocument }) {
           <SectionHeading>Attachments</SectionHeading>
           <div className="flex flex-wrap gap-2">
             {doc.attachments.map((attachment) => (
-              <span
+              <a
                 key={attachment.attachmentId}
-                className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground"
+                href={`${config.apiUrl}/api/attachments/manual?key=${encodeURIComponent(attachment.attachmentId)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60"
               >
                 <Paperclip className="h-3 w-3" />
                 {attachment.fileName}
-              </span>
+                {attachment.size != null && <span className="text-muted-foreground/70">· {formatBytes(attachment.size)}</span>}
+              </a>
             ))}
           </div>
         </div>
