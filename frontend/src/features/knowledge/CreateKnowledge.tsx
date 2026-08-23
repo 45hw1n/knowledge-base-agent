@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@apollo/client";
 import { toast } from "sonner";
-import { X } from "lucide-react";
 import { Modal } from "@/lib/ui/modal";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/lib/ui/card";
 import { Button } from "@/lib/ui/button";
@@ -9,8 +8,8 @@ import { Label } from "@/lib/ui/label";
 import { Textarea } from "@/lib/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/lib/ui/select";
 import { AttachmentUploaderButton } from "@/components/AttachmentGroup/AttachmentUploaderButton";
+import { AttachmentCard } from "@/components/AttachmentGroup/AttachmentCard";
 import { useLocalAttachmentSelection } from "@/features/attachments/hooks/useLocalAttachmentSelection";
-import { formatAttachmentFileSize } from "@/features/attachments/utils";
 import { CREATE_KNOWLEDGE_BASE } from "@/graphql/query/knowledge/knowledgeQueries";
 import { usePendingCreationsStore } from "@/store/pendingCreationsStore";
 import type { EntityType } from "@/mocks/entities.types";
@@ -110,27 +109,18 @@ export function CreateKnowledge({ open, onOpenChange }: CreateKnowledgeProps) {
               <AttachmentUploaderButton onFilesSelected={addFiles} disabled={items.length >= MAX_ATTACHMENTS} />
             </div>
             {items.length > 0 && (
-              <ul className="space-y-1.5">
+              <div className="flex flex-col gap-1.5">
                 {items.map((item) => (
-                  <li
+                  <AttachmentCard
                     key={item.localId}
-                    className="flex items-center justify-between rounded-md border px-2.5 py-1.5 text-sm"
-                  >
-                    <span className="truncate">{item.fileName}</span>
-                    <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-                      {formatAttachmentFileSize(item.size)}
-                      <button
-                        type="button"
-                        onClick={() => remove(item.localId)}
-                        className="hover:text-foreground"
-                        aria-label={`Remove ${item.fileName}`}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                  </li>
+                    fileName={item.fileName}
+                    size={item.size}
+                    mimeType={item.mimeType}
+                    status={item.status}
+                    onRemove={() => remove(item.localId)}
+                  />
                 ))}
-              </ul>
+              </div>
             )}
           </div>
         </CardContent>

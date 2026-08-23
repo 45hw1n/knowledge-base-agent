@@ -2534,3 +2534,60 @@ storage key, then independently exercised the exact
 `storageService.getSignedDownloadUrl` call the new route makes and
 downloaded the signed URL directly — the bytes matched the uploaded file
 exactly. Test records/object were deleted after verification.
+
+### `AttachmentCard` reused for Conversations, Invoice/Ticket Attachments tab, and Create Knowledge staging
+
+Before touching anything, checked whether a nicer attachment-display
+component already existed to avoid building a fourth divergent
+implementation. Found `AttachmentCard`
+(`components/AttachmentGroup/AttachmentCard.tsx`) — a pure presentational
+row (mime-type icon, filename, size, optional retry/remove/dismiss
+actions) with no GraphQL or upload logic of its own. It was defined but
+**completely unused** anywhere in the app; its wrapper, `AttachmentGroup`,
+wires it to `useAttachmentDownload`/`useAttachmentUploader`, which in turn
+call a `getAttachmentDownloadUrl` query / `uploadAttachments` mutation —
+investigated that system too, since reusing `AttachmentGroup` wholesale
+would have meant reusing its download plumbing. That system turned out to
+be **orphaned end-to-end**: its `AttachmentEntityType` enum
+(`REVIEW`/`TRANSACTION`/`RECURRING_PAYMENT`/`PROFILE`/`WORKSPACE`) doesn't
+include any of Cortex's real entity types, and every backend entity
+handler for it is an explicit `notImplementedHandler` stub with no
+backing Mongoose model — leftover scaffolding from a different product,
+never wired to Ticket/Invoice/Payment/Event/Document. Confirmed no live
+UI calls it. Decision: reuse only the presentational `AttachmentCard`
+itself, not `AttachmentGroup`, and keep it wired to the download
+mechanisms already built earlier this session
+(`/api/attachments/manual`, `/api/attachments/gmail/...`).
+
+- `Conversations.tsx`'s `AttachmentBadge` now renders `<AttachmentCard
+  status="SUCCESS" onSelect={() => window.open(href, "_blank", ...)}>`
+  instead of a bare `<a>` pill — `href` resolution (manual vs Gmail route)
+  is unchanged. Since `AttachmentBadge` is shared by Conversations'
+  message bubbles and both Invoice's and Ticket's Attachments tabs, all
+  three switched over from one edit. Container classes changed from `flex
+  flex-wrap gap-2` to `flex flex-col gap-1.5` in all three call sites —
+  `AttachmentCard` is a full-width row, not a compact pill, so it stacks
+  rather than wraps.
+- `CreateKnowledge.tsx`'s local file-staging list (previously a hand-rolled
+  `<ul>/<li>` with a bare `X` button) now renders one `AttachmentCard` per
+  staged `AttachmentItem`, wired only to `onRemove` — no `onSelect`
+  (matches prior non-interactive-except-remove behavior; a local
+  object-URL preview was judged out of scope for this change) and no
+  retry/dismiss (`useLocalAttachmentSelection` never produces
+  `UPLOADING`/`FAILED` items — actual upload happens server-side after
+  submission, not client-side).
+- `DocumentDetail.tsx` was intentionally left untouched (not in the
+  request's scope) — it still renders a plain `<a>` for Document's
+  attachments, now visually inconsistent with the other three locations.
+  Flagged as a natural follow-up, not done speculatively.
+
+**Verified visually in the browser**, not just by reading code: created a
+fresh manual Ticket with attachment via a direct script (the browser's
+`file_upload` automation tool is still non-functional in this
+environment — confirmed again, same failure as earlier in the session)
+and confirmed in the live UI that `AttachmentCard` renders correctly in
+both the Attachments tab and the Conversation tab, and that clicking it
+opens the real signed R2 URL and serves the real file content. Also
+submitted a text-only entry through the actual `CreateKnowledge` modal in
+the browser to confirm the staging-list swap didn't regress the rest of
+the form.

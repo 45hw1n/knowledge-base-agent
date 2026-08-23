@@ -80,7 +80,7 @@ export function InvoiceDetail({ invoice }: { invoice: Invoice }) {
           {attachments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No attachments.</p>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-1.5">
               {attachments.map(({ messageId, attachment }) => (
                 <AttachmentBadge key={attachment.attachmentId} messageId={messageId} attachment={attachment} />
               ))}

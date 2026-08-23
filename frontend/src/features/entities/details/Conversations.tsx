@@ -1,8 +1,8 @@
 import { Fragment } from "react";
-import { Paperclip } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/lib/ui/avatar";
 import { cn } from "@/lib/utils";
 import config from "@/lib/config";
+import { AttachmentCard } from "@/components/AttachmentGroup/AttachmentCard";
 import type { AttachmentRef, ConversationDirection, ConversationMessage, Person } from "@/mocks/entities.types";
 import { formatDateTime } from "./format";
 
@@ -73,28 +73,29 @@ function getDisplayName(sender: Person | null, direction: ConversationDirection)
   return direction === "SENT" ? "You" : "Unknown sender";
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function AttachmentBadge({ messageId, attachment }: { messageId: string; attachment: AttachmentRef }) {
-  // Never stored by Cortex — this hits a live proxy that fetches the bytes
-  // from Gmail on demand, on every click. See backend/src/routes/attachmentRoutes.js.
-  const href = `${config.apiUrl}/api/attachments/gmail/${encodeURIComponent(messageId)}/${encodeURIComponent(attachment.attachmentId)}`;
+  // A manual "Create Knowledge" attachment's attachmentId is an R2 storage
+  // key (`users/{userId}/manual-ingestion/...`), not a Gmail attachmentId —
+  // route those through the signed-URL redirect instead of the Gmail-only
+  // live proxy. See backend/src/routes/attachmentRoutes.js.
+  const href = attachment.attachmentId.startsWith("users/")
+    ? `${config.apiUrl}/api/attachments/manual?key=${encodeURIComponent(attachment.attachmentId)}`
+    : `${config.apiUrl}/api/attachments/gmail/${encodeURIComponent(messageId)}/${encodeURIComponent(attachment.attachmentId)}`;
 
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60"
-    >
-      <Paperclip className="h-3 w-3" />
-      {attachment.fileName}
-      {attachment.size != null && <span className="text-muted-foreground/70">· {formatBytes(attachment.size)}</span>}
-    </a>
+    <AttachmentCard
+      fileName={attachment.fileName}
+      size={attachment.size ?? 0}
+      mimeType={attachment.mimeType ?? "application/octet-stream"}
+      status="SUCCESS"
+      onSelect={() => window.open(href, "_blank", "noopener,noreferrer")}
+    />
   );
 }
 
@@ -122,7 +123,7 @@ function ConversationMessageBubble({ message }: { message: ConversationMessage }
         <RichContent content={message.content} />
 
         {message.attachments.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-col gap-1.5">
             {message.attachments.map((attachment) => (
               <AttachmentBadge key={attachment.attachmentId} messageId={message.messageId} attachment={attachment} />
             ))}
