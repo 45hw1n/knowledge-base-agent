@@ -40,21 +40,26 @@ export function SourceFooter({
   createdAt,
   updatedAt,
 }: {
-  sourceUrl: string;
+  sourceUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }) {
   return (
     <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-      <a
-        href={sourceUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex w-fit items-center gap-1 text-primary hover:underline"
-      >
-        <ExternalLink className="h-3 w-3" />
-        View original source
-      </a>
+      {/* Manually-created entities (source MANUAL) have no durable original
+          document to link back to — sourceUrl is null in that case, see
+          sourceUrlService.js's MANUAL case and decisions.md. */}
+      {sourceUrl && (
+        <a
+          href={sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex w-fit items-center gap-1 text-primary hover:underline"
+        >
+          <ExternalLink className="h-3 w-3" />
+          View original source
+        </a>
+      )}
       <span>
         Extracted {formatDateTime(createdAt)}
         {updatedAt !== createdAt ? ` · Updated ${formatDateTime(updatedAt)}` : ""}

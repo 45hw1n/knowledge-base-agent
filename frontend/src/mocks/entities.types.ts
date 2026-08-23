@@ -50,10 +50,10 @@ export type SourceType = 'EMAIL' | 'DOCUMENT';
 export type EntityType = 'TICKET' | 'INVOICE' | 'PAYMENT' | 'EVENT' | 'DOCUMENT';
 export type ExtractionStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
 
-// Backend today only implements EMAIL/GMAIL (see backend/src/models/Entity.js
-// — SOURCE_TYPES is deliberately kept generic for MANUAL/UPLOAD/API to be
-// added later without a migration). MANUAL is added here, mock-only, ahead
-// of that backend work so the Source column has both cases to render.
+// Backend implements EMAIL/GMAIL (Gmail sync) and MANUAL (the "Create
+// Knowledge" flow) — see backend/src/models/Entity.js. SOURCE_TYPES stays
+// generic so UPLOAD/API sources can still be added later without a
+// migration.
 export interface EntitySourceEmail {
   type: 'EMAIL';
   provider: 'GMAIL';
@@ -64,6 +64,8 @@ export interface EntitySourceEmail {
 
 export interface EntitySourceManual {
   type: 'MANUAL';
+  provider: 'MANUAL';
+  url: null;
 }
 
 export type EntitySource = EntitySourceEmail | EntitySourceManual;
@@ -110,7 +112,9 @@ export interface Ticket {
   conversation: ConversationMessage[];
   parentTicketId: string | null;
   duplicateOfTicketId: string | null;
-  sourceUrl: string;
+  // Null for manually-created entities (source MANUAL) — no durable
+  // original document to link back to. See sourceUrlService.js.
+  sourceUrl: string | null;
   sourceType: SourceType;
   threadId: string | null;
   messageId: string | null;
@@ -138,7 +142,9 @@ export interface Invoice {
   issuer: Person | null;
   status: InvoiceStatus;
   conversation: ConversationMessage[];
-  sourceUrl: string;
+  // Null for manually-created entities (source MANUAL) — no durable
+  // original document to link back to. See sourceUrlService.js.
+  sourceUrl: string | null;
   sourceType: SourceType;
   threadId: string | null;
   messageId: string | null;
@@ -165,7 +171,9 @@ export interface Payment {
   payee: Person | null;
   invoiceId: string | null;
   linkMethod: PaymentLinkMethod | null;
-  sourceUrl: string;
+  // Null for manually-created entities (source MANUAL) — no durable
+  // original document to link back to. See sourceUrlService.js.
+  sourceUrl: string | null;
   sourceType: SourceType;
   threadId: string | null;
   messageId: string | null;
@@ -202,7 +210,9 @@ export interface CalendarEvent {
   attendees: Person[];
   organizer: Person | null;
   attachments: EventAttachmentRef[];
-  sourceUrl: string;
+  // Null for manually-created entities (source MANUAL) — no durable
+  // original document to link back to. See sourceUrlService.js.
+  sourceUrl: string | null;
   sourceType: SourceType;
   threadId: string | null;
   messageId: string | null;
@@ -245,7 +255,9 @@ export interface KnowledgeDocument {
   effectiveDate: string | null;
   expiryDate: string | null;
   attachments: AttachmentRef[];
-  sourceUrl: string;
+  // Null for manually-created entities (source MANUAL) — no durable
+  // original document to link back to. See sourceUrlService.js.
+  sourceUrl: string | null;
   sourceType: SourceType;
   threadId: string | null;
   messageId: string | null;
