@@ -7,7 +7,7 @@ export type PageRouteNode = {
 /** App pages under AppLayout — add nested entries to `children` for sub-pages. */
 export const PAGE_ROUTE_TREE: PageRouteNode[] = [
   { segment: "home", title: "Home" },
-  { segment: "conversations", title: "Conversations" },
+  { segment: "ask-cortex", title: "Ask Cortex" },
   { segment: "settings", title: "Settings" },
 ];
 

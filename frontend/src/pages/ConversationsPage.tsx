@@ -17,7 +17,7 @@ export default function ConversationsPage() {
   }, [loadConversations]);
 
   // Hydrates the active conversation's transcript on navigation/refresh —
-  // without this, refreshing /conversations/:id would show an empty panel
+  // without this, refreshing /ask-cortex/:id would show an empty panel
   // with no way to reload it (the store holds no history across reloads).
   useEffect(() => {
     if (!conversationId) return;

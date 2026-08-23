@@ -68,7 +68,7 @@ export function ChatPanel({ conversationId, onOpenHistory }: ChatPanelProps) {
   const handleSend = async (content: string) => {
     if (!conversationId) {
       const { conversationId: newId } = await sendNewConversation(content);
-      navigate(`/conversations/${newId}`);
+      navigate(`/ask-cortex/${newId}`);
       return;
     }
     await sendMessage(conversationId, content);

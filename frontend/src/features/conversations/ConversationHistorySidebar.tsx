@@ -39,12 +39,12 @@ export function ConversationHistorySidebar({
   // there's no "create an empty conversation" call anymore, so this just
   // returns to the welcome screen, matching handleSelect(null).
   const handleNewConversation = () => {
-    navigate("/conversations");
+    navigate("/ask-cortex");
     onMobileOpenChange(false);
   };
 
   const handleSelect = (id: string) => {
-    navigate(`/conversations/${id}`);
+    navigate(`/ask-cortex/${id}`);
     onMobileOpenChange(false);
   };
 

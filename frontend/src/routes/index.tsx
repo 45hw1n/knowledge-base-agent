@@ -25,8 +25,8 @@ export function AppRoutes() {
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
             <Route path="/home" element={<HomePage />} />
-            <Route path="/conversations" element={<ConversationsPage />} />
-            <Route path="/conversations/:conversationId" element={<ConversationsPage />} />
+            <Route path="/ask-cortex" element={<ConversationsPage />} />
+            <Route path="/ask-cortex/:conversationId" element={<ConversationsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
         </Route>

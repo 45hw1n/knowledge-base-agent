@@ -7,6 +7,7 @@ import { PageHeaderTitle } from "@/components/page-header-title";
 import { CreateKnowledgeTrigger } from "@/features/knowledge/CreateKnowledgeTrigger";
 import { EntityDetailSheet } from "@/features/entities/EntityDetailSheet";
 import { useEntityDetailSheetStore } from "@/store/entityDetailSheetStore";
+import { cn } from "@/lib/utils";
 import {
   SidebarCollapseTrigger,
   SidebarInset,
@@ -14,7 +15,7 @@ import {
   SidebarTrigger,
 } from "@/lib/ui/sidebar";
 
-const CONVERSATIONS_PATH_PREFIX = "/conversations";
+const ASK_CORTEX_PATH_PREFIX = "/ask-cortex";
 
 export default function AppLayout() {
   const { pathname } = useLocation();
@@ -23,21 +24,21 @@ export default function AppLayout() {
   // sidebar stays locked to its icon rail rather than competing for space,
   // and the normal padded/max-width page wrapper is skipped so the route
   // can lay out its own three-pane content edge to edge.
-  const isConversationsRoute = pathname.startsWith(CONVERSATIONS_PATH_PREFIX);
+  const isAskCortexRoute = pathname.startsWith(ASK_CORTEX_PATH_PREFIX);
   const sheetEntity = useEntityDetailSheetStore((s) => s.entity);
   const sheetOpen = useEntityDetailSheetStore((s) => s.open);
   const closeSheet = useEntityDetailSheetStore((s) => s.close);
 
   return (
     <SidebarProvider
-      open={isConversationsRoute ? false : undefined}
-      onOpenChange={isConversationsRoute ? () => {} : undefined}
+      open={isAskCortexRoute ? false : undefined}
+      onOpenChange={isAskCortexRoute ? () => {} : undefined}
     >
       <AppSidebar />
-      <SidebarInset className="min-w-0 bg-muted/30">
+      <SidebarInset className={cn("min-w-0 bg-muted/30", isAskCortexRoute && "h-svh overflow-hidden")}>
         <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border/60 bg-background/80 px-4 backdrop-blur-md">
           <SidebarTrigger className="md:hidden" />
-          {!isConversationsRoute && <SidebarCollapseTrigger className="hidden md:flex" />}
+          {!isAskCortexRoute && <SidebarCollapseTrigger className="hidden md:flex" />}
           <div className="h-4 w-px bg-border" />
           <PageHeaderTitle />
           <div className="ml-auto flex items-center gap-4">
@@ -49,7 +50,7 @@ export default function AppLayout() {
             <AppSettings />
           </div>
         </header>
-        {isConversationsRoute ? (
+        {isAskCortexRoute ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <Outlet />
           </div>
