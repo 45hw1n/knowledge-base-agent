@@ -37,8 +37,9 @@ export function createEntityColumns(onTitleClick: (entity: Entity) => void): Sup
       cell: ({ row }) => <EntityTypeBadge type={row.original.type} />,
     },
     {
-      // Nested path (source.type) — same shallow-lookup sorting caveat as
-      // "date" below, so sorting stays off here too.
+      // Nested path (source.type) — sorting disabled: the shared
+      // client-side sort helper (applyClientSideProcessing) does a shallow
+      // `row[key]` lookup, which can't resolve a dotted path.
       id: "source",
       accessorKey: "source.type",
       header: "Source",
@@ -67,20 +68,6 @@ export function createEntityColumns(onTitleClick: (entity: Entity) => void): Sup
           {row.original.title}
         </button>
       ),
-    },
-    {
-      // Nested path (extraction.extractedAt) — sorting disabled: the shared
-      // client-side sort helper (applyClientSideProcessing) does a shallow
-      // `row[key]` lookup, which can't resolve a dotted path. Not worth a
-      // custom sort implementation for a mock table; flagged rather than
-      // shipping a sort arrow that silently does nothing.
-      id: "date",
-      accessorKey: "extraction.extractedAt",
-      header: "Date",
-      minWidth: 110,
-      defaultWidth: 130,
-      maxWidth: 260,
-      cell: ({ row }) => formatDate(row.original.extraction.extractedAt),
     },
     {
       id: "createdDate",
