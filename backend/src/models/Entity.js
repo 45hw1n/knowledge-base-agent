@@ -24,10 +24,13 @@ const ENTITY_TYPE_PREFIXES = {
   DOCUMENT: 'DOC',
 };
 
-// Only EMAIL/GMAIL is implemented today; the shape is kept generic so
-// UPLOAD/API/MANUAL sources can be added later without a schema migration.
-const SOURCE_TYPES = ['EMAIL'];
-const SOURCE_PROVIDERS = ['GMAIL'];
+// EMAIL/GMAIL is the sync pipeline's source; MANUAL is the user-initiated
+// "Create Knowledge" flow (see manualIngestionOrchestrator) — the schema
+// comment here previously anticipated exactly this extension, added without
+// a migration as planned. The shape stays generic so UPLOAD/API sources can
+// still be added later the same way.
+const SOURCE_TYPES = ['EMAIL', 'MANUAL'];
+const SOURCE_PROVIDERS = ['GMAIL', 'MANUAL'];
 
 // Describes the state of Cortex's extraction pipeline for this Entity, NOT
 // the business status of the underlying Ticket/Invoice/etc — that lives on
@@ -41,16 +44,28 @@ const SourceSchema = new mongoose.Schema(
       enum: SOURCE_TYPES,
       required: true,
     },
+    // Required only for EMAIL — a manually-created entity has no external
+    // provider to name. Same conditional-required reasoning as emailId/
+    // threadId below.
     provider: {
       type: String,
       enum: SOURCE_PROVIDERS,
-      required: true,
+      required: function () {
+        return this.type === 'EMAIL';
+      },
     },
     // Application-generated navigation URL back to the original source.
     // Never set by the AI/extraction layer — see sourceUrlService.js.
+    // Required only for EMAIL: a manual entry has no durable "original
+    // document" to link back to (an R2 object URL would need to be
+    // presigned and would expire — the wrong shape for a field meant to be
+    // a permanent reference, unlike Gmail's stable deep link). See
+    // sourceUrlService.js's MANUAL case and decisions.md.
     url: {
       type: String,
-      required: true,
+      required: function () {
+        return this.type === 'EMAIL';
+      },
       trim: true,
     },
     // Reference to the temporary `emails` record (not yet implemented —

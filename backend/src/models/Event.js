@@ -102,11 +102,16 @@ const EventSchema = new mongoose.Schema(
 
     // Application-generated navigation URL back to the original source
     // (e.g. the Gmail message) — same provenance principle as Entity.source.url.
-    // Required: an Event must always be traceable to where it came from.
+    // Required only when sourceType is EMAIL — a manually-created event has
+    // no durable original document to link back to. See
+    // sourceUrlService.js's MANUAL case and decisions.md.
     sourceUrl: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
     sourceType: {
       type: String,
@@ -126,10 +131,13 @@ const EventSchema = new mongoose.Schema(
     // Gmail's raw message id — required whenever sourceType is EMAIL (an
     // email-sourced record always has a concrete message it came from);
     // optional otherwise. Also the key used for message-level
-    // deduplication provenance.
+    // deduplication provenance. No `default: null` — see Ticket.js's
+    // identical field for why: a truly-omitted messageId (non-EMAIL
+    // source) must stay genuinely absent, or the unique+sparse index below
+    // collides across every non-EMAIL event for the same user. See
+    // decisions.md.
     messageId: {
       type: String,
-      default: null,
       required: function () {
         return this.sourceType === 'EMAIL';
       },
@@ -149,8 +157,13 @@ const EventSchema = new mongoose.Schema(
 
 EventSchema.index({ userId: 1 });
 EventSchema.index({ userId: 1, startTime: 1 });
-// Same retry-safety reasoning as Invoice's messageId index — see there.
-EventSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
+// Same retry-safety reasoning as Invoice's messageId index — see there. A
+// partial index, not sparse — see Invoice.js/Ticket.js for why a compound
+// sparse index doesn't actually skip non-EMAIL (messageId-absent) records.
+EventSchema.index(
+  { userId: 1, messageId: 1 },
+  { unique: true, partialFilterExpression: { messageId: { $type: 'string' } } }
+);
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Event
@@ -178,13 +191,15 @@ function validateExtractedEvent(raw) {
     return { event: null, error: 'Extracted event is missing a valid required "startTime"' };
   }
 
-  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
-  if (!sourceUrl) {
-    return { event: null, error: 'Extracted event is missing a required "sourceUrl"' };
-  }
-
   if (!SOURCE_TYPES.includes(raw.sourceType)) {
     return { event: null, error: `Extracted event has an invalid "sourceType": ${raw.sourceType}` };
+  }
+
+  // Required only for EMAIL — a manual entry has no durable original
+  // document to link back to (see sourceUrlService.js's MANUAL case).
+  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
+  if (raw.sourceType === 'EMAIL' && !sourceUrl) {
+    return { event: null, error: 'Extracted event with sourceType EMAIL is missing a required "sourceUrl"' };
   }
 
   if (raw.sourceType === 'EMAIL' && !raw.messageId) {
@@ -229,10 +244,10 @@ function validateExtractedEvent(raw) {
       attendees,
       organizer,
       attachments,
-      sourceUrl,
+      sourceUrl: sourceUrl || null,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
-      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

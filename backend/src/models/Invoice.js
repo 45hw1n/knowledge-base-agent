@@ -70,10 +70,16 @@ const InvoiceSchema = new mongoose.Schema(
     },
 
     // Application-generated navigation URL back to the original source.
+    // Required only when sourceType is EMAIL — a manually-created invoice
+    // has no durable original document to link back to. See
+    // sourceUrlService.js's MANUAL case and decisions.md.
     sourceUrl: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
     sourceType: {
       type: String,
@@ -87,9 +93,12 @@ const InvoiceSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // No `default: null` — see Ticket.js's identical field for why: a
+    // truly-omitted messageId (non-EMAIL source) must stay genuinely
+    // absent, or the unique+sparse index below collides across every
+    // non-EMAIL invoice for the same user. See decisions.md.
     messageId: {
       type: String,
-      default: null,
       required: function () {
         return this.sourceType === 'EMAIL';
       },
@@ -113,7 +122,19 @@ InvoiceSchema.index({ 'metadata.transactionRef': 1 }, { sparse: true });
 // extraction (e.g. after a stale-PROCESSING reclaim) safe: the repository
 // treats the resulting E11000 as "already created" rather than inserting a
 // second Invoice for the same message.
-InvoiceSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
+//
+// A partial index, not sparse: for a COMPOUND index, `sparse` only skips a
+// document when EVERY indexed field is absent — since userId is always
+// present, a merely-absent messageId (any non-EMAIL source, e.g. a manual
+// "Create Knowledge" entry) would still be indexed as null, and every
+// second such invoice for the same user would collide with the first
+// (E11000). The partialFilterExpression instead indexes a document only
+// when messageId is genuinely a string — exactly the EMAIL-only case this
+// uniqueness constraint is meant to cover. See decisions.md.
+InvoiceSchema.index(
+  { userId: 1, messageId: 1 },
+  { unique: true, partialFilterExpression: { messageId: { $type: 'string' } } }
+);
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Invoice
@@ -135,13 +156,15 @@ function validateExtractedInvoice(raw) {
     return { invoice: null, error: 'Extracted invoice is missing a required numeric "amount.value"' };
   }
 
-  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
-  if (!sourceUrl) {
-    return { invoice: null, error: 'Extracted invoice is missing a required "sourceUrl"' };
-  }
-
   if (!SOURCE_TYPES.includes(raw.sourceType)) {
     return { invoice: null, error: `Extracted invoice has an invalid "sourceType": ${raw.sourceType}` };
+  }
+
+  // Required only for EMAIL — a manual entry has no durable original
+  // document to link back to (see sourceUrlService.js's MANUAL case).
+  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
+  if (raw.sourceType === 'EMAIL' && !sourceUrl) {
+    return { invoice: null, error: 'Extracted invoice with sourceType EMAIL is missing a required "sourceUrl"' };
   }
 
   if (raw.sourceType === 'EMAIL' && !raw.messageId) {
@@ -187,10 +210,10 @@ function validateExtractedInvoice(raw) {
       issuer: normalizePerson(raw.issuer),
       status,
       conversation,
-      sourceUrl,
+      sourceUrl: sourceUrl || null,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
-      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

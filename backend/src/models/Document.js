@@ -115,11 +115,16 @@ const DocumentSchema = new mongoose.Schema(
 
     // Application-generated navigation URL back to the original source
     // (e.g. the Gmail message) — same provenance principle as Entity.source.url
-    // and Event.sourceUrl.
+    // and Event.sourceUrl. Required only when sourceType is EMAIL — a
+    // manually-created document has no durable original document to link
+    // back to. See sourceUrlService.js's MANUAL case and decisions.md.
     sourceUrl: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
     sourceType: {
       type: String,
@@ -133,10 +138,12 @@ const DocumentSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    // Required whenever sourceType is EMAIL — see Event.js.
+    // Required whenever sourceType is EMAIL — see Event.js. No
+    // `default: null` — a truly-omitted messageId (non-EMAIL source) must
+    // stay genuinely absent, or the unique+sparse index below collides
+    // across every non-EMAIL document for the same user. See decisions.md.
     messageId: {
       type: String,
-      default: null,
       required: function () {
         return this.sourceType === 'EMAIL';
       },
@@ -156,8 +163,13 @@ const DocumentSchema = new mongoose.Schema(
 DocumentSchema.index({ userId: 1 });
 DocumentSchema.index({ userId: 1, type: 1 });
 DocumentSchema.index({ userId: 1, createdAt: -1 });
-// Same retry-safety reasoning as Invoice's messageId index — see there.
-DocumentSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
+// Same retry-safety reasoning as Invoice's messageId index — see there. A
+// partial index, not sparse — see Invoice.js/Ticket.js for why a compound
+// sparse index doesn't actually skip non-EMAIL (messageId-absent) records.
+DocumentSchema.index(
+  { userId: 1, messageId: 1 },
+  { unique: true, partialFilterExpression: { messageId: { $type: 'string' } } }
+);
 
 function countWords(text) {
   if (!text) return 0;
@@ -198,13 +210,15 @@ function validateExtractedDocument(raw) {
     return { document: null, error: 'Extracted document is missing a required "summary"' };
   }
 
-  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
-  if (!sourceUrl) {
-    return { document: null, error: 'Extracted document is missing a required "sourceUrl"' };
-  }
-
   if (!SOURCE_TYPES.includes(raw.sourceType)) {
     return { document: null, error: `Extracted document has an invalid "sourceType": ${raw.sourceType}` };
+  }
+
+  // Required only for EMAIL — a manual entry has no durable original
+  // document to link back to (see sourceUrlService.js's MANUAL case).
+  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
+  if (raw.sourceType === 'EMAIL' && !sourceUrl) {
+    return { document: null, error: 'Extracted document with sourceType EMAIL is missing a required "sourceUrl"' };
   }
 
   if (raw.sourceType === 'EMAIL' && !raw.messageId) {
@@ -244,7 +258,16 @@ function validateExtractedDocument(raw) {
   const attachments = Array.isArray(raw.attachments)
     ? raw.attachments
         .filter((a) => a && typeof a.attachmentId === 'string' && typeof a.fileName === 'string')
-        .map((a) => ({ attachmentId: a.attachmentId, fileName: a.fileName }))
+        .map((a) => ({
+          attachmentId: a.attachmentId,
+          fileName: a.fileName,
+          // Optional — preserved when the caller has them (e.g. the manual
+          // "Create Knowledge" flow always does) so a consumer can pick the
+          // right icon/preview without a second round-trip. Schema default
+          // is null, so omitting them stays valid for existing callers.
+          mimeType: typeof a.mimeType === 'string' ? a.mimeType : null,
+          size: typeof a.size === 'number' ? a.size : null,
+        }))
     : [];
 
   return {
@@ -259,10 +282,10 @@ function validateExtractedDocument(raw) {
       effectiveDate: parseDate(raw.effectiveDate),
       expiryDate: parseDate(raw.expiryDate),
       attachments,
-      sourceUrl,
+      sourceUrl: sourceUrl || null,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
-      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

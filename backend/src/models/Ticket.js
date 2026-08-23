@@ -117,10 +117,16 @@ const TicketSchema = new mongoose.Schema(
     },
 
     // Application-generated navigation URL back to the original source.
+    // Required only when sourceType is EMAIL — a manually-created ticket
+    // has no durable original document to link back to. See
+    // sourceUrlService.js's MANUAL case and decisions.md.
     sourceUrl: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
     sourceType: {
       type: String,
@@ -132,9 +138,16 @@ const TicketSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // No `default: null` — a truly-omitted messageId (any non-EMAIL
+    // source, e.g. a manual "Create Knowledge" entry) must leave the field
+    // genuinely absent, not explicitly null, or the unique+sparse index
+    // below collides: Mongo's sparse index only exempts documents where
+    // the field is absent, not documents where it's present-but-null —
+    // every non-EMAIL ticket would otherwise index to the same
+    // (userId, null) key and the second one would fail with E11000. See
+    // decisions.md.
     messageId: {
       type: String,
-      default: null,
       required: function () {
         return this.sourceType === 'EMAIL';
       },
@@ -156,7 +169,18 @@ TicketSchema.index({ userId: 1, status: 1 });
 TicketSchema.index({ userId: 1, createdAt: -1 });
 TicketSchema.index({ userId: 1, threadId: 1 });
 // Same retry-safety reasoning as Invoice's messageId index — see there.
-TicketSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
+// A partial index, not sparse: for a COMPOUND index, `sparse` only skips a
+// document when EVERY indexed field is absent — since userId is always
+// present, a merely-absent messageId (any non-EMAIL source, e.g. a manual
+// "Create Knowledge" entry) would still be indexed as null, and every
+// second such ticket for the same user would collide with the first
+// (E11000). The partialFilterExpression instead indexes a document only
+// when messageId is genuinely a string, which is exactly the EMAIL-only
+// case this uniqueness constraint is meant to cover. See decisions.md.
+TicketSchema.index(
+  { userId: 1, messageId: 1 },
+  { unique: true, partialFilterExpression: { messageId: { $type: 'string' } } }
+);
 TicketSchema.index({ parentTicketId: 1 }, { sparse: true });
 TicketSchema.index({ duplicateOfTicketId: 1 }, { sparse: true });
 
@@ -184,13 +208,15 @@ function validateExtractedTicket(raw) {
     return { ticket: null, error: 'Extracted ticket is missing a required "title"' };
   }
 
-  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
-  if (!sourceUrl) {
-    return { ticket: null, error: 'Extracted ticket is missing a required "sourceUrl"' };
-  }
-
   if (!SOURCE_TYPES.includes(raw.sourceType)) {
     return { ticket: null, error: `Extracted ticket has an invalid "sourceType": ${raw.sourceType}` };
+  }
+
+  // Required only for EMAIL — a manual entry has no durable original
+  // document to link back to (see sourceUrlService.js's MANUAL case).
+  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
+  if (raw.sourceType === 'EMAIL' && !sourceUrl) {
+    return { ticket: null, error: 'Extracted ticket with sourceType EMAIL is missing a required "sourceUrl"' };
   }
 
   if (raw.sourceType === 'EMAIL' && !raw.messageId) {
@@ -241,10 +267,12 @@ function validateExtractedTicket(raw) {
       conversation,
       parentTicketId: null,
       duplicateOfTicketId: null,
-      sourceUrl,
+      sourceUrl: sourceUrl || null,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
-      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
+      // undefined, not null — see the schema field's comment above; an
+      // explicit null would still collide on the unique sparse index.
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,

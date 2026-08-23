@@ -86,10 +86,16 @@ const PaymentSchema = new mongoose.Schema(
     },
 
     // Application-generated navigation URL back to the original source.
+    // Required only when sourceType is EMAIL — a manually-created payment
+    // has no durable original document to link back to. See
+    // sourceUrlService.js's MANUAL case and decisions.md.
     sourceUrl: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
+      required: function () {
+        return this.sourceType === 'EMAIL';
+      },
     },
     sourceType: {
       type: String,
@@ -101,9 +107,12 @@ const PaymentSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // No `default: null` — see Ticket.js's identical field for why: a
+    // truly-omitted messageId (non-EMAIL source) must stay genuinely
+    // absent, or the unique+sparse index below collides across every
+    // non-EMAIL payment for the same user. See decisions.md.
     messageId: {
       type: String,
-      default: null,
       required: function () {
         return this.sourceType === 'EMAIL';
       },
@@ -122,8 +131,13 @@ PaymentSchema.index({ userId: 1, invoiceId: 1 });
 PaymentSchema.index({ userId: 1, createdAt: -1 });
 PaymentSchema.index({ userId: 1, threadId: 1 });
 PaymentSchema.index({ 'metadata.transactionRef': 1 }, { sparse: true });
-// Same retry-safety reasoning as Invoice's messageId index — see there.
-PaymentSchema.index({ userId: 1, messageId: 1 }, { unique: true, sparse: true });
+// Same retry-safety reasoning as Invoice's messageId index — see there. A
+// partial index, not sparse — see Invoice.js/Ticket.js for why a compound
+// sparse index doesn't actually skip non-EMAIL (messageId-absent) records.
+PaymentSchema.index(
+  { userId: 1, messageId: 1 },
+  { unique: true, partialFilterExpression: { messageId: { $type: 'string' } } }
+);
 
 /**
  * Validates and normalizes a raw LLM-extracted candidate into the Payment
@@ -153,13 +167,15 @@ function validateExtractedPayment(raw) {
     return { payment: null, error: 'Extracted payment is missing a valid required "paidAt"' };
   }
 
-  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
-  if (!sourceUrl) {
-    return { payment: null, error: 'Extracted payment is missing a required "sourceUrl"' };
-  }
-
   if (!SOURCE_TYPES.includes(raw.sourceType)) {
     return { payment: null, error: `Extracted payment has an invalid "sourceType": ${raw.sourceType}` };
+  }
+
+  // Required only for EMAIL — a manual entry has no durable original
+  // document to link back to (see sourceUrlService.js's MANUAL case).
+  const sourceUrl = typeof raw.sourceUrl === 'string' ? raw.sourceUrl.trim() : '';
+  if (raw.sourceType === 'EMAIL' && !sourceUrl) {
+    return { payment: null, error: 'Extracted payment with sourceType EMAIL is missing a required "sourceUrl"' };
   }
 
   if (raw.sourceType === 'EMAIL' && !raw.messageId) {
@@ -184,10 +200,10 @@ function validateExtractedPayment(raw) {
       payer: normalizePerson(raw.payer),
       payee: normalizePerson(raw.payee),
       invoiceId: null,
-      sourceUrl,
+      sourceUrl: sourceUrl || null,
       sourceType: raw.sourceType,
       threadId: typeof raw.threadId === 'string' ? raw.threadId : null,
-      messageId: typeof raw.messageId === 'string' ? raw.messageId : null,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : undefined,
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
     },
     error: null,
