@@ -2267,3 +2267,206 @@ field exists) or cross-referencing linked Payments' amounts onto Invoice
 queries (e.g. "invoices with no payments yet") — real, plausible follow-up
 questions, but out of scope for this pass; would need a join beyond the
 single-collection `find()` every reader does today.
+
+---
+
+## Phase 5 — Manual Knowledge Base creation
+
+### Context
+
+A second, user-initiated path for creating an entity, alongside the Gmail
+sync pipeline: a "Create Knowledge" modal where the user picks a type,
+types free-text details, optionally attaches files, and submits — the
+backend extracts structured fields (the same per-type AI prompts already
+used for email extraction) and creates the entity asynchronously, with the
+frontend polling for completion and a clickable "Entity created" toast that
+opens the existing Entity Detail Sheet.
+
+### Found before implementing: R2 credentials were placeholders, not real values
+
+`R2_BUCKET_NAME` was literally the string `"placeholder"` in both
+`.env.local` and `.env.production`, and `R2_ACCESS_KEY_ID`/
+`R2_SECRET_ACCESS_KEY` were both only 11 characters — far short of a real
+Cloudflare R2 key/secret. Per explicit instruction to stop and ask rather
+than assume, this was flagged before building the storage layer. The user
+opted to update `.env` themselves; this phase's code was built against the
+existing `config.storage` shape (`provider`/`accountId`/`accessKeyId`/
+`secretAccessKey`/`bucketName`/`endpoint`, consumed via
+`@aws-sdk/client-s3`'s `PutObjectCommand` in `cloudflareR2StorageProvider.js`)
+so it works the moment real values land — verified end-to-end for the
+no-attachment path; attachment upload itself is unverified against a real
+bucket as of this writing.
+
+### Decision: a fully separate `ai/manualIngestionOrchestrator/` pipeline, not a route into the email pipeline
+
+**Reasoning:** confirmed by direct code tracing that `ai/orchestrator/`'s
+`extractAndPersistEntity` is hard-wired to Gmail specifics at every layer:
+attachment bytes come from `gmailService.fetchAttachment` (manual entry
+already has the bytes in hand), the source URL is a hardcoded Gmail deep
+link (`sourceUrlService.js` threw for any other provider before this
+phase), and every repository's idempotency check is keyed on
+`emailDoc.messageId` (a manual entry has none — every submission is simply
+a new record). This is the third instance of the same "separate pipeline,
+reuse only leaf pieces" pattern in this codebase (`ai/chatOrchestrator/`,
+`ai/manualIngestionOrchestrator/`, both siblings of `ai/orchestrator/`).
+Reused directly: `runStructuredExtraction()` (the per-type prompts +
+`validateExtracted<Type>()`), `summarizeBody()`, `documentParserClient.parse()`
+(called on the already-uploaded buffer, bypassing Gmail fetch entirely),
+and `generateDisplayId()`.
+
+### Decision: `sourceType: 'DOCUMENT'` and `Entity.source.type: 'MANUAL'` — schema fields that existed but were never exercised
+
+`SOURCE_TYPES = ['EMAIL', 'DOCUMENT']` already existed on all five typed
+models, and `Entity.js` already carried a comment anticipating
+"MANUAL/UPLOAD/API sources... added later without a schema migration" —
+this phase is the first real code path to actually set `sourceType:
+'DOCUMENT'` and `Entity.source.type: 'MANUAL'`. `Entity.SOURCE_TYPES`/
+`SOURCE_PROVIDERS` gained a `MANUAL` value; `source.provider`/`source.url`
+became conditionally required only for `type === 'EMAIL'` (mirroring the
+existing conditional-required pattern already used for `emailId`/`threadId`).
+
+### Decision: `sourceUrl`/`source.url` becomes conditionally required (EMAIL only), never a presigned R2 URL
+
+**Reasoning:** a manually-created entity has no durable "original document"
+to link back to. An R2 object URL would need to be presigned and would
+expire — the wrong shape for a field every model's own comments describe as
+a permanent reference (unlike Gmail's stable deep link). `buildSourceUrl`
+(`sourceUrlService.js`) gained a `MANUAL` case that returns `null`, and
+every typed model's `sourceUrl` field (plus `Entity.source.url` and the
+GraphQL schema's corresponding fields, all previously non-nullable) became
+conditionally required only for `sourceType === 'EMAIL'`. The frontend's
+`SourceFooter` (shared across all five detail views) now renders the "View
+original source" link only when a URL is present — verified live: a
+manually-created Ticket's detail sheet shows only the extracted/updated
+timestamps, no broken/missing link.
+
+### Decision: extraction precedence — user-typed details win, attachments only fill gaps
+
+The user's typed `details` text is run through `runStructuredExtraction`
+first; each attachment is parsed (`documentParserClient.parse`) and
+extracted separately, but an attachment's value for a field only gets used
+if the details-based extraction left that field null. Attachments never
+override an explicit value the user typed. If both sources yield nothing
+at all, the submission is marked `FAILED` with `INVALID_EXTRACTION` rather
+than silently creating an empty/garbage entity.
+
+### Decision: attachments are copied onto the created entity only for Document — not Event
+
+**Correction made during implementation, not before:** the plan assumed
+both Document and Event already had an `attachments` field suitable for
+raw uploaded files. Re-reading `Event.js` directly showed this is wrong —
+`Event.attachments` (`{documentId, filename}`) is a cross-reference to a
+**separately-extracted Document entity**, not a physical file, per the
+model's own comment ("NOT the attachment's contents"). Populating it with
+a manually-uploaded file's storage key would create a dangling reference to
+a Document entity that doesn't exist. Only `Document.attachments`
+(`models/schemas/AttachmentRefSchema.js`: `{attachmentId, fileName,
+mimeType, size}`) is a genuine raw-file reference — manual uploads are
+copied there (using the R2 storage key as `attachmentId`), and nowhere else
+in the Event case. Ticket/Invoice/Payment have no attachments field at all
+(their `conversation[]` is a different concept); uploaded files for those
+three types are used purely as extraction input, not durably re-attached.
+While here, `validateExtractedDocument` was also extended to preserve
+`mimeType`/`size` on attachment refs when the caller has them (previously
+silently dropped even though the schema already supported them) — a
+backward-compatible improvement that benefits the email pipeline too.
+
+### Decision: no idempotency lookup, no thread/conversation seeding for manual entries
+
+Every `persist<Type>FromManualEntry` function always creates a new record
+— there's no `messageId` to key a dedupe check on, and no email to build an
+initial `conversation[]` message from (`buildInitialConversationMessage` is
+skipped entirely). `Payment.paidAt` falls back to submission time if
+extraction can't find an explicit date (same "never reject when a
+reasonable fallback exists" principle as the email pipeline's own
+`emailDoc.date` fallback) — but `Event.startTime` deliberately gets **no**
+such fallback: defaulting a missing event time to "now" would misleadingly
+imply it's happening immediately, whereas defaulting a payment's date to
+"just reported" is a reasonable reading of a manual submission. A missing
+`startTime` surfaces as a genuine `FAILED` result instead.
+
+### Decision: global toast + polling + entity-sheet store, mirroring `AppInitializer.tsx`
+
+`ManualIngestionPoller` (mounted once in `routes/index.tsx`, alongside the
+existing `AppInitializer`) polls a new `manualIngestionStatus` GraphQL
+query every 10s for whatever creationIds are pending, mirroring
+`AppInitializer.tsx`'s existing poll-and-toast-on-completion pattern (used
+there for email sync) rather than inventing a new one. Pending creationIds
+live in `sessionStorage` (`lib/pendingCreations.ts`) mirrored into a small
+Zustand store (`pendingCreationsStore.ts`) purely because sessionStorage
+itself isn't reactive — every mutation goes through the storage helpers
+first so a page reload still picks up what was pending. A second,
+independent `EntityDetailSheet` instance (fed by a new
+`entityDetailSheetStore.ts`) is mounted globally in `AppLayout.tsx` — the
+existing sheet is local state scoped to `EntityList.tsx`, which can't serve
+a toast that fires from any route; `EntityList.tsx` itself is untouched.
+
+**Verified end-to-end (details-only, no attachment):** modal submission →
+immediate close + "Creation in progress" toast → async orchestration
+correctly extracted title, summary, and `urgency: HIGH` from free-text
+details mentioning "high urgency" → poll → clickable "Entity created
+#TKT-004" toast → opened the correct Ticket in the global Entity Detail
+Sheet with no "View original source" link.
+
+**R2 credentials found to be placeholders before implementing, then
+corrected:** `R2_BUCKET_NAME` was literally `"placeholder"` in both env
+files with 11-character access key/secret (real R2 keys are ~32/~40+
+chars) — flagged per instruction rather than assumed. The user updated
+them mid-session, but the new bucket names (`cotex-dev`/`cotex`) were
+missing the "r" from "cortex" — flagged again and confirmed as a typo
+before fixing. R2 connectivity itself (upload/exists/delete against the
+real `cortex-dev` bucket) was verified directly via a standalone script
+using the exact `storageService.uploadObject` call path
+`createKnowledbase` uses.
+
+### Bug found: a *second* manually-created entity of the same type always failed with E11000
+
+The browser's file-upload automation tool had a version mismatch in this
+session and couldn't simulate a real file selection, so the
+attachment-driven extraction path was verified by driving
+`processManualIngestion` directly with a real PDF buffer (uploaded to the
+real R2 bucket, parsed by the real Google Document AI processor) — the
+same code the resolver calls, just invoked from a script instead of a
+browser click. The first attempt (a second manual Ticket, after TKT-004)
+failed with `E11000 duplicate key error ... index: userId_1_messageId_1
+... dup key: { userId: ..., messageId: null }`.
+
+**Root cause:** all five typed models already had a
+`{userId, messageId}` unique **sparse** index (built for retry-safety on
+the email pipeline — see the Phase-1-era decisions above). For a
+**compound** sparse index, MongoDB only excludes a document from the index
+when **every** indexed field is absent — since `userId` is always present,
+a merely-absent `messageId` (the manual-entry case) still gets indexed as
+`null`, and a second such record for the same user collides with the
+first. This bug was entirely latent before this phase: every prior record
+had `sourceType: 'EMAIL'` with a real Gmail `messageId`, so the field was
+never actually absent until manual entries started producing genuinely
+message-less records.
+
+**Fix, two parts:**
+1. `messageId`'s schema `default: null` was removed on all five models,
+   and each `validateExtracted<Type>()` now assigns `undefined` (not
+   `null`) when the value isn't a string — so a non-EMAIL record's
+   `messageId` is genuinely absent from the document, not present-with-a-
+   null-value.
+2. The index itself changed from `{ unique: true, sparse: true }` to
+   `{ unique: true, partialFilterExpression: { messageId: { $type:
+   'string' } } }` on all five models — a **partial** index only includes a
+   document when the filter expression matches, which correctly limits
+   this uniqueness constraint to actual EMAIL-sourced records regardless of
+   whether a non-EMAIL record's `messageId` is absent or null. Part 1 alone
+   would NOT have fixed this (compound sparse indexes don't behave like
+   single-field sparse indexes); the partial index is what actually closes
+   the gap. Migrated the existing dev database by dropping and
+   recreating the five indexes (`Model.syncIndexes()` after the schema
+   change) rather than a schema-only fix that would silently do nothing
+   against the already-created index definition.
+
+**Verified end-to-end (post-fix) via the same script, a second time:**
+`processManualIngestion` on a Ticket-shaped PDF (Ticket Number: TCK-9981,
+Status: IN_PROGRESS, Urgency: CRITICAL, Priority: HIGH, Requester: Priya
+Sharma / priya.sharma@acmecorp.com) with a deliberately generic `details`
+text containing none of those fields — created TKT-005 with every field
+correctly pulled from the attachment, not the details text, confirming
+both the extraction-precedence design (Key design decisions above) and the
+index fix. Confirmed visually in the real UI's Entity Detail Sheet.
