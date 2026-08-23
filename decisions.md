@@ -437,6 +437,128 @@ exist yet, or (b) prematurely designing the real AI-extraction rewrite —
 both explicitly out of scope ("do not implement AI extraction yet"). This
 is flagged as a known gap, not a silent one.
 
+### Decision: A generic listing engine (`src/listing/`), not bespoke pagination code per query
+
+**Context:** The `entities` GraphQL query needs to hand the frontend a
+paginated, sortable, filterable page of results
+(`{page, pageSize, sort, conditions}` in, `{data, listInfo, pagination,
+meta}` out — see `EntityListRequestInput`/`EntityListResponse` in
+`schema.js`). Every future list-style query (Manual Entries, and anything
+else typed and collection-shaped) needs the same shape of behavior.
+
+**Decision:** Built one reusable engine (`src/listing/core/`) that any
+collection can plug into by supplying a small declarative config
+(`src/listing/configs/entities.listConfig.js` is the first and, so far,
+only one), rather than writing query-building/pagination logic inside each
+resolver by hand.
+
+**How a request flows through it** (`listService.js:createListService(config).list(request, runtimeContext)`):
+1. **Validate & normalize** — the raw `{page, pageSize, sort, conditions}`
+   is parsed against a Zod schema, then clamped/defaulted (`page`/`pageSize`
+   bounds, `sort` deduped and validated against the config, unrecognized
+   sort fields dropped in favor of the config's `defaultSort`). Every
+   `conditions` node is checked against the config: the referenced
+   attribute must exist and be `filterable`, and the operator must be in
+   that field's specific allow-list — a request naming an unknown field or
+   an operator that field doesn't support is rejected before touching the
+   database.
+2. **Build a condition AST, then translate it to Mongo** — the recursive
+   `{operator, attribute, value, operands}` tree (this is what lets the
+   frontend express AND/OR-composed filters through
+   `EntityListConditionInput`) is first turned into a typed AST
+   (`ast.js`), then walked by `MongoConditionTranslator` (`translator.js`)
+   into a native `$and`/`$or`/`$eq`/`$in`/`$regex`/etc. Mongo match
+   expression. Each field's `dbPath` (see below) is what resolves the
+   public attribute name to the actual document path being queried.
+3. **Apply tenant scoping** — the config's `tenantMatchFactory(runtimeContext)`
+   supplies a `{userId: ...}` match, so every list query is automatically
+   scoped to the requesting user without each resolver having to remember
+   to add it by hand.
+4. **Sort, paginate, and count in one aggregation** — `pipelineBuilder.js`
+   assembles a single `$facet` stage: one branch sorts (always with `_id`
+   appended as a tiebreaker, for stable pagination) and applies
+   `$skip`/`$limit`, the other branch runs `$count` — so the page of data
+   and the total count come back from one round trip to Mongo.
+5. **Shape the response** — `responseBuilder.js` turns the facet result
+   into `{data, listInfo, pagination: {total, totalPages, hasNext,
+   hasPrevious}, meta}`, which is what `EntityListResponse` (and, on the
+   frontend, `SuperTable`'s server-paginated mode) expects.
+
+**The `*.listConfig.js` extensibility pattern:** a config is just data —
+the Mongoose `model`, per-collection tunables (`defaultSort`,
+`maxPageSize`, `defaultPageSize`, `maxConditionDepth`, `maxPredicates`),
+`tenantMatchFactory`, and a `fields` map keyed by the public field name
+(matching the `EntityListField` GraphQL enum). Each field entry declares
+its real `dbPath` (e.g. the public `extractionStatus` maps to the
+document's `extraction.status`), whether it's `sortable`/`filterable`, and
+which operators are valid for it. This indirection is what lets the public
+API shape stay stable while the underlying document shape evolves, and is
+the intended seam for onboarding a new collection: a new config file (new
+`model`, `tenantMatchFactory`, `fields` map) is enough to get real
+server-side pagination for it, with no changes needed to `src/listing/core/`
+itself. `entities.listConfig.js` is currently the only config that exists —
+the `entities` query is the only list-style query backed by this engine so
+far.
+
+### Decision: A Zustand store (`useTableStore`), not component `useState`, holds table state — so a table resumes where the user left it
+
+**Context:** `SuperTable` (the frontend component that consumes the
+listing engine above) needs to remember its page, sort, filters, and
+already-fetched rows. If that lived in the component's own `useState`, it
+would be destroyed the moment the component unmounts — which happens on
+every route navigation in this single-page app (e.g. leaving the Home page
+to open an entity, or switching between Home and Manual Entries).
+
+**Decision:** All of a table's state — `data`, `listInfo`
+(`page`/`pageSize`/`sort`/`filters`/`total`), `selectedRows`,
+`initialized`, `isFetching`, `error`, `refreshVersion` — lives in
+`store/useTableStore.ts`, a Zustand store keyed by table, not in the
+`SuperTable` component itself. A Zustand store is a plain object created
+once at module load, outside React's component tree — mounting/unmounting
+the component that reads from it doesn't create or destroy the store, so
+its contents outlive any one screen the user navigates away from.
+
+**How "resume where you left off" actually works:**
+- Each table is identified by a composite key, `` `${name}__${id}` ``
+  (built by `useTableHook`), so multiple independent tables (Entity list,
+  Manual Entries list, etc.) don't collide in the shared store.
+- `initializeTable(tableKey, defaultListInfo)` is a deliberate no-op if an
+  entry for that key already exists. The first time a table mounts it
+  seeds fresh defaults (page 1, no filters); every subsequent mount —
+  i.e. navigating back to that page — finds its previous entry already
+  there and leaves it untouched. A user who paginated to page 3 and
+  applied a sort, then navigated away and back, lands back on page 3 with
+  that same sort still applied.
+- `SuperTable`'s mount effect additionally distinguishes a genuine cold
+  start from a remount that already has cached data
+  (`hasCachedData = initialized && data.length > 0`) and skips an
+  immediate refetch in that case — so returning to a previously-visited
+  table shows its last-known rows instantly, with no loading skeleton and
+  no redundant network round-trip, only refetching when a dependency
+  (filters, page size, an explicit refresh) actually changed.
+- Every store mutator (`setData`, `setListInfoPartial`,
+  `setListInfoFull`, `setSelectedRows`, ...) is itself a no-op if the
+  `tableKey` isn't in the store yet, which is what makes
+  `refreshTableByKey` (a plain exported function, not a hook) safe to call
+  from anywhere — a mutation's `onCompleted` handler, a sibling
+  component's click handler — via `useTableStore.getState()`, without
+  ever needing a reference to the actual `SuperTable` instance or
+  triggering a re-render of the caller.
+
+**Why this, not React Router state or URL query params:** the same "outlives
+the component" property is what several other frontend stores rely on for
+the same reason, not just tables — `pendingCreationsStore.ts` mirrors
+`sessionStorage` for in-flight manual-ingestion polling so
+`ManualIngestionPoller` keeps tracking a submission regardless of which
+page the user is on, `conversationStore.ts` holds in-progress chat state,
+and `entityDetailSheetStore.ts` drives the globally-mounted Entity Detail
+Sheet so a toast fired from any route can open it. `useTableStore` is the
+most elaborate instance of the pattern: any new `SuperTable` gets
+resume-where-you-left-off behavior automatically just by mounting with a
+stable `id`/`name`, with no per-page persistence code to write — the same
+"plug in a small config, get the behavior for free" shape as the
+`*.listConfig.js` pattern on the backend.
+
 ---
 
 ## Event Entity (first typed child entity)
