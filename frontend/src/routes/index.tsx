@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import { AppInitializer } from "@/components/AppInitializer";
+import { ManualIngestionPoller } from "@/components/ManualIngestionPoller";
 import AppLayout from "@/layouts/AppLayout";
 import ConversationsPage from "@/pages/ConversationsPage";
 import HomePage from "@/pages/HomePage";
@@ -15,6 +16,7 @@ export function AppRoutes() {
   return (
     <>
       <AppInitializer />
+      <ManualIngestionPoller />
       <Routes>
         <Route element={<PublicRoute />}>
           <Route path="/login" element={<LoginPage />} />

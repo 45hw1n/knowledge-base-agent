@@ -4,6 +4,9 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { PageShell } from "@/components/page-layout";
 import { PageHeaderTitle } from "@/components/page-header-title";
+import { CreateKnowledgeTrigger } from "@/features/knowledge/CreateKnowledgeTrigger";
+import { EntityDetailSheet } from "@/features/entities/EntityDetailSheet";
+import { useEntityDetailSheetStore } from "@/store/entityDetailSheetStore";
 import {
   SidebarCollapseTrigger,
   SidebarInset,
@@ -21,6 +24,9 @@ export default function AppLayout() {
   // and the normal padded/max-width page wrapper is skipped so the route
   // can lay out its own three-pane content edge to edge.
   const isConversationsRoute = pathname.startsWith(CONVERSATIONS_PATH_PREFIX);
+  const sheetEntity = useEntityDetailSheetStore((s) => s.entity);
+  const sheetOpen = useEntityDetailSheetStore((s) => s.open);
+  const closeSheet = useEntityDetailSheetStore((s) => s.close);
 
   return (
     <SidebarProvider
@@ -39,6 +45,7 @@ export default function AppLayout() {
             <div className="hidden md:block">
               <LastSyncedAt />
             </div>
+            <CreateKnowledgeTrigger />
             <AppSettings />
           </div>
         </header>
@@ -59,6 +66,10 @@ export default function AppLayout() {
           </div>
         )}
       </SidebarInset>
+      {/* Global instance fed by entityDetailSheetStore — independent from
+          EntityList.tsx's own local one — so a toast fired from any route
+          (e.g. manual "Create Knowledge" completion) can open it. */}
+      <EntityDetailSheet entity={sheetEntity} open={sheetOpen} onOpenChange={(open) => !open && closeSheet()} />
     </SidebarProvider>
   );
 }
