@@ -3,7 +3,6 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { LastSyncedAt } from "@/components/LastSyncedAt";
 import { PageShell } from "@/components/page-layout";
 import { PageHeaderTitle } from "@/components/page-header-title";
-import { CreateKnowledgeTrigger } from "@/features/knowledge/CreateKnowledgeTrigger";
 import { EntityDetailSheet } from "@/features/entities/EntityDetailSheet";
 import { useEntityDetailSheetStore } from "@/store/entityDetailSheetStore";
 import { cn } from "@/lib/utils";
@@ -45,7 +44,6 @@ export default function AppLayout() {
             <div className="hidden md:block">
               <LastSyncedAt />
             </div>
-            <CreateKnowledgeTrigger />
           </div>
         </header>
         {isAskCortexRoute ? (

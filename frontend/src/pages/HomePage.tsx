@@ -3,6 +3,7 @@ import { PageContent } from "@/components/page-layout";
 import { ProcessEmailAlert } from "@/components/ProcessEmailAlert";
 import { SyncEmailsAlert } from "@/components/SyncEmailsAlert";
 import { EntityList } from "@/features/entities/EntityList";
+import { CreateKnowledgeTrigger } from "@/features/knowledge/CreateKnowledgeTrigger";
 
 // TODO: rewrite the search/chat half for Cortex — this currently only
 // covers the "Knowledge" table (see decisions.md's UX sketch). Data is
@@ -14,9 +15,12 @@ export default function HomePage() {
       <SyncEmailsAlert />
       <ProcessEmailAlert />
       <section className="w-full space-y-4">
-        <div className="flex flex-col items-start gap-1">
-          <h2 className="text-xl font-semibold tracking-tight">Knowledge</h2>
-          <p className="text-sm text-muted-foreground">Everything Cortex has extracted from your inbox.</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col items-start gap-1">
+            <h2 className="text-xl font-semibold tracking-tight">Knowledge</h2>
+            <p className="text-sm text-muted-foreground">Everything Cortex has extracted from your inbox.</p>
+          </div>
+          <CreateKnowledgeTrigger />
         </div>
         <EntityList />
       </section>
