@@ -55,7 +55,6 @@ Cortex currently converts incoming information into a small set of structured pr
 
 | Type         | What it represents                                                   |
 | ------------ | ---------------------------------------------------------------------|
-| **Entity**   | The people, companies, vendors, customers, or other parties involved |
 | **Ticket**   | An issue or request that needs attention                             |
 | **Invoice**  | A bill or request for payment                                        |
 | **Payment**  | A financial payment or payment confirmation                          |
@@ -86,7 +85,7 @@ The goal isn't to build another document database.
 
 The goal is to create a layer where **unstructured information becomes structured, queryable knowledge**.
 
-Once an email has been transformed into a Ticket, Invoice, Payment, Document, Event, or Entity, the application no longer needs to repeatedly interpret the original email.
+Once an email has been transformed into a Ticket, Invoice, Payment, Document, or Event, the application no longer needs to repeatedly interpret the original email.
 
 It can query the structured representation directly.
 
